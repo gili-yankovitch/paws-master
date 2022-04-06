@@ -5,7 +5,7 @@
 #include <Keyboard.h>
 #include <NeoPixelBus.h>
 
-#define MAX_KEY_COUNT 256
+#define MAX_KEY_COUNT 128
 #define MAX_BUFFER_DATA (16)
 
 #define EEPROM_ADDR_IS_CONFIG 0x0
@@ -20,7 +20,7 @@ struct serial_config_s
 	uint8_t data[0];
 };
 
-#define LEDS_PIN 0
+#define LEDS_PIN 6
 #define TOKEN_RECV_PIN 4
 #define TOKEN_SEND_PIN 5
 
@@ -50,8 +50,10 @@ enum btn_state_e
 	BTN_STATE_PRESSED
 };
 
+#define BASE_ASSIGN_ADDR 2
+
 static enum btn_state_e *btnStates = NULL;
-static uint8_t assignAddr = 2;
+static uint8_t assignAddr = BASE_ASSIGN_ADDR;
 
 struct key_obj_s
 {
@@ -419,45 +421,22 @@ error:
 	return err;
 }
 
-static void dataHandler(int data)
+static void dataHandler(int size)
 {
+	Serial.println("RECV DATA");
+
 	// Wait for the data
 	while (Wire.available() < 1)
 		;
 
 	// Get the addr
-	uint8_t addrRecvd = Wire.read();
+	uint8_t data = Wire.read();
+	uint8_t addrRecvd = data & 0b01111111;
 
-	if (addrRecvd >= assignAddr / 2)
-	{
-		// Ignore
-		return;
-	}
+	Serial.println("Received: " + String(addrRecvd));
+	Serial.println("State: " + String((data & 0b10000000) == 0 ? BTN_STATE_RELEASED : BTN_STATE_PRESSED));
 
-	Serial.println("Received: " + addrRecvd);
-
-	btnStates[addrRecvd & (~1)] = (enum btn_state_e)(addrRecvd & 0x1);
-#if 0
-	// During initialization, keys send their names in-order.
-	// Log them so we'll know which one was pressed in turn.
-	if (!initDone)
-	{
-		keyIds = (int *)realloc(keyIds, ++keysNum * sizeof(int));
-
-		// Log the name
-		keyIds[keysNum - 1] = data;
-
-		return;
-	}
-
-	if (dataIdx == MAX_BUFFER_DATA)
-	{
-		// Sorry, too much buffered data
-		return;
-	}
-
-	dataBuffer[dataIdx++] = data;
-#endif
+	btnStates[addrRecvd] = (enum btn_state_e)((data & 0b10000000) == 0 ? BTN_STATE_RELEASED : BTN_STATE_PRESSED);
 }
 
 uint8_t idToKey(int id)
@@ -508,6 +487,7 @@ void tokenPass()
 
 #define I2C_BCAST_ADDR 0
 #define I2C_MASTER_ADDR 1
+#define MAX_ADDR_ASSIGN_RETRIES 40
 
 #define REQUESTS
 
@@ -526,7 +506,7 @@ void initializeI2CAddrs()
 
 	Serial.println("Initiating address distribution...");
 
-	// Iniitalize I2C as master
+	// Initalize I2C as master
 	Wire.begin(I2C_MASTER_ADDR);
 
 	Serial.println("Setting TOKEN_SEND to LOW");
@@ -548,12 +528,18 @@ void initializeI2CAddrs()
 	// Signal to the first chip it is its time for address allocation
 	digitalWrite(TOKEN_SEND_PIN, HIGH);
 
+	unsigned retries = 0;
+
 	// While last chip did not return the token,
 	// distribute addresses
 	// while (initTokenCount == tokenRecvCnt)
 	while (1)
 	{
 		Serial.println("Assigning address: " + String(assignAddr) + "...");
+
+		ledStrip.SetPixelColor((assignAddr - BASE_ASSIGN_ADDR), RgbColor(0, 0, 255));
+		ledStrip.Show();
+
 #ifdef REQUESTS
 		// Wait for message from this address
 		Wire.beginTransmission(I2C_BCAST_ADDR);
@@ -570,7 +556,14 @@ void initializeI2CAddrs()
 
 		if (!Wire.available())
 		{
-			Serial.println("Did not receive response. Retrying...");
+			// In case something in the return path failed for some reason
+			if ((++retries > MAX_ADDR_ASSIGN_RETRIES) && (assignAddr != BASE_ASSIGN_ADDR))
+			{
+
+				break;
+			}
+
+			Serial.println("Did not receive response. Retrying (" + String(retries) + ")...");
 		}
 		else
 		{
@@ -581,10 +574,17 @@ void initializeI2CAddrs()
 			{
 				Serial.println("Received ACK from " + String(ack));
 
-				btnStates = (enum btn_state_e *)realloc(btnStates, sizeof(enum btn_state_e) * (assignAddr / 2));
+				btnStates = (enum btn_state_e *)realloc(btnStates, sizeof(enum btn_state_e) * (assignAddr + 1));
+
+				btnStates[assignAddr] = BTN_STATE_RELEASED;
+
+				ledStrip.SetPixelColor((assignAddr - BASE_ASSIGN_ADDR), RgbColor(0, 255, 0));
+				ledStrip.Show();
 
 				// Increase addr assign
-				assignAddr += 2;
+				assignAddr += 1;
+
+				retries = 0;
 
 				// Finish it up
 				if (digitalRead(TOKEN_RECV_PIN) == HIGH)
@@ -595,8 +595,13 @@ void initializeI2CAddrs()
 		}
 	}
 
+	// Finish setup, drive token LOW
+	digitalWrite(TOKEN_SEND_PIN, LOW);
+
 	Serial.println("Address distribution done.");
 }
+
+bool requested[MAX_ADDR_ASSIGN_RETRIES];
 
 void setup()
 {
@@ -629,36 +634,56 @@ void setup()
 	pinMode(TOKEN_RECV_PIN, INPUT); // INPUT_PULLUP ?
 	// attachInterrupt(digitalPinToInterrupt(TOKEN_RECV_PIN), tokenRecv, RISING);
 
+	// Reset LEDs
+	for (int i = 0; i < MAX_KEY_COUNT; ++i)
+	{
+		ledStrip.SetPixelColor(i, RgbColor(0, 0, 0));
+	}
+
+	ledStrip.Show();
+
 	// Assign all addresses
 	initializeI2CAddrs();
 
 	// Start questioning all the modules
 	Wire.onReceive(dataHandler);
 
+	for (int i = 0; i < MAX_KEY_COUNT; ++i)
+	{
+		ledStrip.SetPixelColor(i, RgbColor(0, 0, 255));
+	}
+
+	ledStrip.Show();
+
 	// Initialize keyboard
 	// Keyboard.begin();
+
+	for (int i = 0; i < MAX_ADDR_ASSIGN_RETRIES; ++i)
+	{
+		requested[i] = false;
+	}
+
+	// Now act as slave
+	Wire.begin(I2C_BCAST_ADDR);
 }
 
 void loop()
 {
 	unsigned i = 0;
-	for (i = 2; i < assignAddr; i += 2)
+
+	for (i = BASE_ASSIGN_ADDR; i < assignAddr; i++)
 	{
-		Wire.requestFrom(i, 1);
-
-		if (Wire.available())
+		if (btnStates[i] == BTN_STATE_PRESSED)
 		{
-			// Get the addr
-			uint8_t addrRecvd = Wire.read();
-
-			if (addrRecvd & 1)
-			{
-				Serial.println("Received: " + String(addrRecvd));
-			}
-
-			btnStates[addrRecvd & (~1)] = (enum btn_state_e)(addrRecvd & 0x1);
+			ledStrip.SetPixelColor(i - BASE_ASSIGN_ADDR, RgbColor(0, 255, 0));
+		}
+		else
+		{
+			ledStrip.SetPixelColor(i - BASE_ASSIGN_ADDR, RgbColor(0, 0, 255));
 		}
 	}
+
+	ledStrip.Show();
 #if 0
 	unsigned i;
 
