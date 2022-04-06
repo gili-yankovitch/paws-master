@@ -423,8 +423,6 @@ error:
 
 static void dataHandler(int size)
 {
-	Serial.println("RECV DATA");
-
 	// Wait for the data
 	while (Wire.available() < 1)
 		;
@@ -432,11 +430,15 @@ static void dataHandler(int size)
 	// Get the addr
 	uint8_t data = Wire.read();
 	uint8_t addrRecvd = data & 0b01111111;
+	enum btn_state_e recvState = (data & 0b10000000) == 0 ? BTN_STATE_RELEASED : BTN_STATE_PRESSED;
+
+	if (btnStates[addrRecvd] == recvState)
+		return;
 
 	Serial.println("Received: " + String(addrRecvd));
-	Serial.println("State: " + String((data & 0b10000000) == 0 ? BTN_STATE_RELEASED : BTN_STATE_PRESSED));
+	Serial.println("State: " + String(recvState));
 
-	btnStates[addrRecvd] = (enum btn_state_e)((data & 0b10000000) == 0 ? BTN_STATE_RELEASED : BTN_STATE_PRESSED);
+	btnStates[addrRecvd] = recvState;
 }
 
 uint8_t idToKey(int id)
@@ -487,7 +489,7 @@ void tokenPass()
 
 #define I2C_BCAST_ADDR 0
 #define I2C_MASTER_ADDR 1
-#define MAX_ADDR_ASSIGN_RETRIES 40
+#define MAX_ADDR_ASSIGN_RETRIES 50
 
 #define REQUESTS
 
@@ -559,7 +561,6 @@ void initializeI2CAddrs()
 			// In case something in the return path failed for some reason
 			if ((++retries > MAX_ADDR_ASSIGN_RETRIES) && (assignAddr != BASE_ASSIGN_ADDR))
 			{
-
 				break;
 			}
 
@@ -591,6 +592,10 @@ void initializeI2CAddrs()
 				{
 					break;
 				}
+			}
+			else
+			{
+				Serial.println("Received something: " + String(ack));
 			}
 		}
 	}
