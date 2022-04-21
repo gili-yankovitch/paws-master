@@ -28,6 +28,8 @@ struct serial_config_s
 #define O_NONBLOCK 00004000
 #endif
 
+unsigned int parse_state = 0;
+
 #define CONFIG_MAGIC_IDX (0)
 #define CONFIG_MAGIC_SIZE (2)
 #define CONFIG_OBJNUM_IDX (CONFIG_MAGIC_IDX + CONFIG_MAGIC_SIZE)
@@ -168,7 +170,12 @@ static void eepromDumpConfig(uint8_t *config, uint16_t size)
 
 static bool isConfigured()
 {
-	return (eepromReadByte(EEPROM_ADDR_IS_CONFIG) == 1) ? true : false;
+	static bool isConf = false;
+
+	if (!isConf)
+		isConf = (eepromReadByte(EEPROM_ADDR_IS_CONFIG) == 1) ? true : false;
+
+	return isConf;
 }
 
 static uint16_t eepromLoadConfig(uint8_t **config)
@@ -192,7 +199,7 @@ static uint16_t eepromLoadConfig(uint8_t **config)
 	// Read the data
 	for (i = 0; i < size; ++i)
 	{
-		*config[i] = eepromReadByte(EEPROM_ADDR_CONFIG_START + i);
+		(*config)[i] = eepromReadByte(EEPROM_ADDR_CONFIG_START + i);
 	}
 
 error:
@@ -226,6 +233,8 @@ static int parseConfig(uint8_t *buf, size_t size)
 	uint16_t objnum;
 	size_t i;
 
+	parse_state = __LINE__;
+
 	// Check magic
 	magic = (buf[CONFIG_MAGIC_IDX + 0] << 0) | (buf[CONFIG_MAGIC_IDX + 1] << 8);
 
@@ -235,6 +244,8 @@ static int parseConfig(uint8_t *buf, size_t size)
 
 		goto error;
 	}
+
+	parse_state = __LINE__;
 
 	// Get number of objects
 	objnum = (buf[CONFIG_OBJNUM_IDX + 0] << 0) | (buf[CONFIG_OBJNUM_IDX + 1] << 8);
@@ -248,11 +259,15 @@ static int parseConfig(uint8_t *buf, size_t size)
 		goto error;
 	}
 
+	parse_state = __LINE__;
+
 	// Free previous config
 	if (config)
 	{
 		free(config);
 	}
+
+	parse_state = __LINE__;
 
 	// Allocate config
 	config = (struct config_s *)malloc(sizeof(struct config_s) + sizeof(struct config_obj_s) * objnum);
@@ -269,6 +284,8 @@ static int parseConfig(uint8_t *buf, size_t size)
 		free(keyMap);
 	}
 
+	parse_state = __LINE__;
+
 	// Reset led map array
 	ledMapSize = 0;
 
@@ -277,15 +294,19 @@ static int parseConfig(uint8_t *buf, size_t size)
 		free(ledsMap);
 	}
 
+	parse_state = __LINE__;
+
 	// Populate objects
 	for (i = 0; i < config->configObjNum; ++i)
 	{
+		parse_state = __LINE__;
 		config->objects[i].magic = buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE];
 
 		switch (config->objects[i].magic)
 		{
 		case CONFIG_KEY:
 		{
+			parse_state = __LINE__;
 			config->objects[i].data.key.keyValue = buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_MAGIC_SIZE + CONFIG_OBJ_KEYVAL_IDX];
 
 			// Map keys
@@ -334,8 +355,19 @@ static int handleSerialConfig()
 		goto done;
 	}
 
+	// Read data request
+	if (Serial.read() != 0x42)
+	{
+		Serial.println("Error receiving read request magic");
+
+		goto done;
+	}
+
+	// Write magic number so desktop can identify this as the correct port
+	Serial.write("\x42\x69");
+
 	// Receive magic
-	if (serialRecv((uint8_t *)&magic, sizeof(magic), 0) != sizeof(uint16_t))
+	if (serialRecv((uint8_t *)&magic, sizeof(magic), O_NONBLOCK) != sizeof(uint16_t))
 	{
 		Serial.println("Error receiving magic number");
 
@@ -351,7 +383,7 @@ static int handleSerialConfig()
 	}
 
 	// Receive size
-	if (serialRecv((uint8_t *)&size, sizeof(uint16_t), 0) != sizeof(uint16_t))
+	if (serialRecv((uint8_t *)&size, sizeof(uint16_t), O_NONBLOCK) != sizeof(uint16_t))
 	{
 		Serial.println("Error recveing config size");
 
@@ -361,7 +393,7 @@ static int handleSerialConfig()
 	data = (struct serial_config_s *)malloc(sizeof(struct serial_config_s) + size);
 
 	// Populate data
-	if (serialRecv(data->data, size, 0) != size)
+	if (serialRecv(data->data, size, O_NONBLOCK) != size)
 	{
 		Serial.println("Error receiving config data");
 
@@ -378,6 +410,8 @@ static int handleSerialConfig()
 
 		goto error;
 	}
+
+	Serial.print("\xFF");
 
 	// Dump config to eeprom
 	eepromDumpConfig(data->data, data->size);
@@ -435,8 +469,8 @@ static void dataHandler(int size)
 	if (btnStates[addrRecvd] == recvState)
 		return;
 
-	Serial.println("Received: " + String(addrRecvd));
-	Serial.println("State: " + String(recvState));
+	// Serial.println("Received: " + String(addrRecvd));
+	// Serial.println("State: " + String(recvState));
 
 	btnStates[addrRecvd] = recvState;
 }
@@ -460,31 +494,8 @@ uint8_t idToKey(int id)
 
 		return keyMap[i];
 	}
-}
 
-void xMitUSBData(int data)
-{
-	// TODO: Convert data to key strokes
-	Keyboard.press(idToKey(data));
-	delay(50);
-	Keyboard.release(idToKey(data));
-}
-
-static void tokenRecv()
-{
-	if (!initDone)
-	{
-		initDone = true;
-	}
-
-	tokenRecvCnt++;
-}
-
-void tokenPass()
-{
-	digitalWrite(TOKEN_SEND_PIN, LOW);
-	digitalWrite(TOKEN_SEND_PIN, HIGH);
-	tokenSentCnt++;
+	return 0;
 }
 
 #define I2C_BCAST_ADDR 0
@@ -615,13 +626,13 @@ void setup()
 
 	// Initialize serial
 	Serial.begin(115200);
-#if 0
+
 	// Load config
 	if ((isConfigured()) && (configStartup() < 0))
 	{
 		Serial.println("Error loading config. Is it initialized?");
 	}
-#endif
+
 	// Initialize init boolean
 	initDone = false;
 
@@ -675,12 +686,21 @@ void setup()
 void loop()
 {
 	unsigned i = 0;
+	static unsigned long prevReconfigMillis = 0;
 
 	for (i = BASE_ASSIGN_ADDR; i < assignAddr; i++)
 	{
 		if (btnStates[i] == BTN_STATE_PRESSED)
 		{
-			ledStrip.SetPixelColor(i - BASE_ASSIGN_ADDR, RgbColor(0, 255, 0));
+			if (isConfigured())
+			{
+				led_obj_s *color = &ledsMap[i - BASE_ASSIGN_ADDR];
+				ledStrip.SetPixelColor(i - BASE_ASSIGN_ADDR, RgbColor(color->ledR, color->ledG, color->ledB));
+			}
+			else
+			{
+				ledStrip.SetPixelColor(i - BASE_ASSIGN_ADDR, RgbColor(0, 255, 0));
+			}
 		}
 		else
 		{
@@ -689,31 +709,32 @@ void loop()
 	}
 
 	ledStrip.Show();
-#if 0
-	unsigned i;
 
 	// Always try and update config
-	handleSerialConfig();
+	if (millis() - prevReconfigMillis >= 1000)
+	{
+		handleSerialConfig();
+
+		// Update millis
+		prevReconfigMillis = millis();
+	}
 
 	// If init is not done, don't execute main logic yet
-	if (!initDone)
+	if (!isConfigured())
 	{
 		return;
 	}
 
-	// Transmit data
-	for (i = 0; i < dataIdx; ++i)
+	for (i = BASE_ASSIGN_ADDR; i < assignAddr; i++)
 	{
-		xMitUSBData(dataBuffer[i]);
+		if (btnStates[i] == BTN_STATE_PRESSED)
+		{
+			// Serial.println("Btn #" + String(i) + " PRESSED: " + String(keyMap[0]) + " Map size: " + String(keyMapSize) + " parseState: " + String(parse_state) + " Config objects: " + String(config ? config->configObjNum : 0));
+			Keyboard.press(keyMap[i - BASE_ASSIGN_ADDR]);
+		}
+		else
+		{
+			Keyboard.release(keyMap[i - BASE_ASSIGN_ADDR]);
+		}
 	}
-
-	// Reset data Idx
-	dataIdx = 0;
-
-	// Did I get the token? Pass it over
-	if (tokenRecvCnt != tokenSentCnt)
-	{
-		tokenPass();
-	}
-#endif
 }
