@@ -35,16 +35,25 @@ unsigned int parse_state = 0;
 #define CONFIG_OBJNUM_IDX (CONFIG_MAGIC_IDX + CONFIG_MAGIC_SIZE)
 #define CONFIG_OBJNUM_SIZE (2)
 #define CONFIG_OBJARR_IDX (CONFIG_OBJNUM_IDX + CONFIG_OBJNUM_SIZE)
-#define CONFIG_OBJ_SIZE (4)
-#define CONFIG_OBJ_MAGIC_SIZE (1)
+#define CONFIG_OBJ_SIZE (8)
+#define CONFIG_OBJ_TYPE_OFFSET (0)
+#define CONFIG_OBJ_TYPE_SIZE (1)
+#define CONFIG_OBJ_BTN_IDX_OFFSET (CONFIG_OBJ_TYPE_OFFSET + CONFIG_OBJ_TYPE_SIZE)
+#define CONFIG_OBJ_BTN_IDX_SIZE (1)
+#define CONFIG_OBJ_DATA_OFFSET (CONFIG_OBJ_BTN_IDX_OFFSET + CONFIG_OBJ_BTN_IDX_SIZE)
+
 #define CONFIG_OBJ_KEYVAL_IDX (0)
+
 #define CONFIG_OBJ_LED_R_IDX (0)
 #define CONFIG_OBJ_LED_G_IDX (1)
 #define CONFIG_OBJ_LED_B_IDX (2)
 
+#define CONFIG_OBJ_LED_ANIMATION (3)
+
 #define CONFIG_BEGIN 0x4242
 #define CONFIG_KEY 0x01
 #define CONFIG_LED 0x02
+#define CONFIG_ANIMATION 0x03
 
 enum btn_state_e
 {
@@ -60,6 +69,7 @@ static uint8_t assignAddr = BASE_ASSIGN_ADDR;
 struct key_obj_s
 {
 	uint8_t keyValue;
+	struct key_obj_s *next;
 };
 
 struct led_obj_s
@@ -69,16 +79,34 @@ struct led_obj_s
 	uint8_t ledB;
 };
 
+enum animation_type
+{
+	ANIMATION_GRADIENT = 0,
+	ANIMATION_PULSE = 1,
+	ANIMATION_STILL = 2
+};
+
+struct animation_obj_s
+{
+	enum animation_type type;
+
+	struct led_obj_s color;
+};
+
 struct config_obj_s
 {
-	uint8_t magic;
+	uint8_t type;
+	uint8_t btnIdx;
+
 	union
 	{
 		struct key_obj_s key;
 
-		struct led_obj_s led;
+		struct led_obj_s clickColor;
 
-		uint8_t tmp[3];
+		struct animation_obj_s animation;
+
+		uint8_t tmp[CONFIG_OBJ_SIZE];
 	} data;
 };
 
@@ -97,12 +125,12 @@ struct config_s
 
 // ***** Config objects *****
 // *** Key object ***
-// | CONFIG_KEY       | 0x01      | 1            | Magic number - Key val obj   |
+// | CONFIG_KEY       | 0x01      | 1            | Type number - Key val obj    |
 // | CONFIG_KEY_VAL   | 0xXX      | 1            | Value for i-th key           |
 // | EMPTY            | 0xXX      | 2            | Alignment for 4-bytes object |
 
 // *** LED object ***
-// | CONFIG_LED       | 0x02      | 1            | Magic number - LED val obj   |
+// | CONFIG_LED       | 0x02      | 1            | Type number - LED val obj    |
 // | CONFIG_LED_R_VAL | 0xXX      | 1            | Red value for i-th key       |
 // | CONFIG_LED_G_VAL | 0xXX      | 1            | Green value for i-th key     |
 // | CONFIG_LED_B_VAL | 0xXX      | 1            | Blue value for i-th key      |
@@ -112,17 +140,11 @@ bool initDone;
 static unsigned tokenRecvCnt;
 static unsigned tokenSentCnt;
 
-static unsigned dataIdx;
-static int dataBuffer[MAX_BUFFER_DATA];
-
-static size_t keysNum = 0;
-static int *keyIds = NULL;
-
-static size_t keyMapSize = 0;
-static uint8_t *keyMap = NULL;
-
-static size_t ledMapSize = 0;
-static struct led_obj_s *ledsMap = NULL;
+static size_t btnNum = 0;
+static uint16_t animationCycle = 0;
+static struct key_obj_s **keyMap = NULL;
+static struct led_obj_s **ledsMap = NULL;
+static struct animation_obj_s **animationMap = NULL;
 
 NeoPixelBus<NeoGrbFeature, Neo800KbpsMethod> ledStrip(MAX_KEY_COUNT, LEDS_PIN);
 
@@ -232,6 +254,7 @@ static int parseConfig(uint8_t *buf, size_t size)
 	uint16_t magic;
 	uint16_t objnum;
 	size_t i;
+	unsigned configObjId;
 
 	parse_state = __LINE__;
 
@@ -267,8 +290,6 @@ static int parseConfig(uint8_t *buf, size_t size)
 		free(config);
 	}
 
-	parse_state = __LINE__;
-
 	// Allocate config
 	config = (struct config_s *)malloc(sizeof(struct config_s) + sizeof(struct config_obj_s) * objnum);
 
@@ -276,66 +297,88 @@ static int parseConfig(uint8_t *buf, size_t size)
 	config->configMagic = magic;
 	config->configObjNum = objnum;
 
-	// Reset key map array
-	keyMapSize = 0;
-
-	if (keyMap)
-	{
-		free(keyMap);
-	}
-
-	parse_state = __LINE__;
-
-	// Reset led map array
-	ledMapSize = 0;
-
-	if (ledsMap)
-	{
-		free(ledsMap);
-	}
-
-	parse_state = __LINE__;
-
 	// Populate objects
-	for (i = 0; i < config->configObjNum; ++i)
+	for (i = 0, configObjId = 0; i < config->configObjNum; ++i)
 	{
-		parse_state = __LINE__;
-		config->objects[i].magic = buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE];
+		uint8_t configType = buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_TYPE_OFFSET];
+		uint8_t btnIdx = buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_BTN_IDX_OFFSET];
 
-		switch (config->objects[i].magic)
+		parse_state = __LINE__;
+
+		if (btnIdx >= btnNum)
+		{
+			// Ignore this config - No such button idx.
+			continue;
+		}
+
+		switch (configType)
 		{
 		case CONFIG_KEY:
 		{
+			uint8_t keyValue = buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_KEYVAL_IDX];
+
 			parse_state = __LINE__;
-			config->objects[i].data.key.keyValue = buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_MAGIC_SIZE + CONFIG_OBJ_KEYVAL_IDX];
+
+			config->objects[configObjId].data.key.keyValue = keyValue;
+			config->objects[configObjId].data.key.next = NULL;
 
 			// Map keys
-			keyMap = (uint8_t *)realloc(keyMap, sizeof(uint8_t) * ++keyMapSize);
-			keyMap[keyMapSize - 1] = config->objects[i].data.key.keyValue;
+			if (keyMap[btnIdx] == NULL)
+			{
+				keyMap[btnIdx] = &config->objects[configObjId].data.key;
+			}
+			else
+			{
+				struct key_obj_s *last = keyMap[btnIdx];
+
+				// Find the last object to append to
+				while (last->next)
+				{
+					last = last->next;
+				}
+
+				last->next = &config->objects[configObjId].data.key;
+			}
 
 			break;
 		}
 
 		case CONFIG_LED:
 		{
-			ledsMap = (struct led_obj_s *)malloc(sizeof(struct led_obj_s) * ++ledMapSize);
-			ledsMap[ledMapSize - 1].ledR = config->objects[i].data.led.ledR =
-				buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_MAGIC_SIZE + CONFIG_OBJ_LED_R_IDX];
-			ledsMap[ledMapSize - 1].ledG = config->objects[i].data.led.ledR =
-				buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_MAGIC_SIZE + CONFIG_OBJ_LED_G_IDX];
-			ledsMap[ledMapSize - 1].ledB = config->objects[i].data.led.ledR =
-				buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_MAGIC_SIZE + CONFIG_OBJ_LED_B_IDX];
+			config->objects[configObjId].data.clickColor.ledR =
+				buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_R_IDX];
+			config->objects[configObjId].data.clickColor.ledG =
+				buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_G_IDX];
+			config->objects[configObjId].data.clickColor.ledB =
+				buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_B_IDX];
 
-			ledStrip.SetPixelColor(ledMapSize - 1, RgbColor(ledsMap[ledMapSize - 1].ledR,
-															ledsMap[ledMapSize - 1].ledG,
-															ledsMap[ledMapSize - 1].ledB));
+			ledsMap[btnIdx] = &config->objects[configObjId].data.clickColor;
 
+			break;
+		}
+
+		case CONFIG_ANIMATION:
+		{
+			config->objects[configObjId].data.animation.color.ledR =
+				buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_R_IDX];
+			config->objects[configObjId].data.animation.color.ledG =
+				buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_G_IDX];
+			config->objects[configObjId].data.animation.color.ledB =
+				buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_B_IDX];
+			config->objects[configObjId].data.animation.type = (enum animation_type)
+				buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_ANIMATION];
 			break;
 		}
 
 		default:
 			break;
 		}
+
+		config->objects[configObjId].btnIdx = btnIdx;
+		config->objects[configObjId].type = configType;
+
+		// Valid config. Advance...
+		configObjId++;
 	}
 
 	err = 0;
@@ -475,32 +518,9 @@ static void dataHandler(int size)
 	btnStates[addrRecvd] = recvState;
 }
 
-uint8_t idToKey(int id)
-{
-	size_t i;
-
-	for (i = 0; i < keysNum; ++i)
-	{
-		if (id != keyIds[i])
-		{
-			continue;
-		}
-
-		// Maybe map is smaller than keyboard size?
-		if (id >= keyMapSize)
-		{
-			return 0;
-		}
-
-		return keyMap[i];
-	}
-
-	return 0;
-}
-
-#define I2C_BCAST_ADDR 0
-#define I2C_MASTER_ADDR 1
-#define MAX_ADDR_ASSIGN_RETRIES 50
+#define I2C_BCAST_ADDR (0)
+#define I2C_MASTER_ADDR (1)
+#define MAX_ADDR_ASSIGN_RETRIES (50)
 
 #define REQUESTS
 
@@ -513,9 +533,11 @@ void I2CAddrAsignReq()
 
 void initializeI2CAddrs()
 {
-	// Start with addr '1' as 0 is reserved as 'broadcast'
-	unsigned initTokenCount = tokenRecvCnt;
-	uint8_t ack = assignAddr;
+	// Reset assignAddr
+	assignAddr = BASE_ASSIGN_ADDR;
+
+	// Reset buttons number
+	btnNum = 0;
 
 	Serial.println("Initiating address distribution...");
 
@@ -545,7 +567,6 @@ void initializeI2CAddrs()
 
 	// While last chip did not return the token,
 	// distribute addresses
-	// while (initTokenCount == tokenRecvCnt)
 	while (1)
 	{
 		Serial.println("Assigning address: " + String(assignAddr) + "...");
@@ -558,7 +579,7 @@ void initializeI2CAddrs()
 		Wire.beginTransmission(I2C_BCAST_ADDR);
 		Wire.write(assignAddr);
 		Wire.endTransmission();
-		Wire.requestFrom(assignAddr, 1);
+		Wire.requestFrom(assignAddr, (uint8_t)1);
 #else
 		Wire.beginTransmission(I2C_BCAST_ADDR);
 		Wire.write(assignAddr);
@@ -587,6 +608,17 @@ void initializeI2CAddrs()
 				Serial.println("Received ACK from " + String(ack));
 
 				btnStates = (enum btn_state_e *)realloc(btnStates, sizeof(enum btn_state_e) * (assignAddr + 1));
+				keyMap = (struct key_obj_s **)realloc(keyMap, sizeof(struct key_obj_s *) * (btnNum + 1));
+				ledsMap = (struct led_obj_s **)realloc(keyMap, sizeof(struct led_obj_s *) * (btnNum + 1));
+				animationMap = (struct animation_obj_s **)realloc(keyMap, sizeof(struct animation_obj_s *) * (btnNum + 1));
+
+				// Reset this new cell
+				keyMap[btnNum] = NULL;
+				ledsMap[btnNum] = NULL;
+				animationMap[btnNum] = NULL;
+
+				// Increase number of buttons
+				btnNum++;
 
 				btnStates[assignAddr] = BTN_STATE_RELEASED;
 
@@ -627,21 +659,12 @@ void setup()
 	// Initialize serial
 	Serial.begin(115200);
 
-	// Load config
-	if ((isConfigured()) && (configStartup() < 0))
-	{
-		Serial.println("Error loading config. Is it initialized?");
-	}
-
 	// Initialize init boolean
 	initDone = false;
 
 	// Reset token counters
 	tokenRecvCnt = 0;
 	tokenSentCnt = 0;
-
-	// Reset data buffer index
-	dataIdx = 0;
 
 	Serial.println("Board booted.");
 
@@ -660,6 +683,12 @@ void setup()
 
 	// Assign all addresses
 	initializeI2CAddrs();
+
+	// Load config - Only now I know how many buttons there are
+	if ((isConfigured()) && (configStartup() < 0))
+	{
+		Serial.println("Error loading config. Is it initialized?");
+	}
 
 	// Start questioning all the modules
 	Wire.onReceive(dataHandler);
@@ -683,6 +712,59 @@ void setup()
 	Wire.begin(I2C_BCAST_ADDR);
 }
 
+static RgbColor Gradient(uint8_t btnIdx)
+{
+	uint8_t WheelPos = 255 - (((btnIdx * 256 / btnNum) + animationCycle) & 0xFF);
+
+	if (WheelPos < 85)
+	{
+		return RgbColor(255 - WheelPos * 3, 0, WheelPos * 3);
+	}
+	else if (WheelPos < 170)
+	{
+		WheelPos -= 85;
+		return RgbColor(0, WheelPos * 3, 255 - WheelPos * 3);
+	}
+	else
+	{
+		WheelPos -= 170;
+		return RgbColor(WheelPos * 3, 255 - WheelPos * 3, 0);
+	}
+}
+
+static RgbColor Pulse(uint8_t btnIdx)
+{
+	uint8_t cycle;
+
+	if ((animationCycle % 512) < 256)
+	{
+		cycle = animationCycle & 0xff;
+	}
+	else
+	{
+		cycle = 255 - (animationCycle & 0xff);
+	}
+
+	uint32_t r = ledsMap[btnIdx]->ledR;
+	uint32_t g = ledsMap[btnIdx]->ledG;
+	uint32_t b = ledsMap[btnIdx]->ledB;
+
+	r *= cycle;
+	g *= cycle;
+	b *= cycle;
+
+	r /= 255;
+	b /= 255;
+	r /= 255;
+
+	return RgbColor(r, g, b);
+}
+
+static RgbColor Still(uint8_t btnIdx)
+{
+	return RgbColor(ledsMap[btnIdx]->ledR, ledsMap[btnIdx]->ledG, ledsMap[btnIdx]->ledB);
+}
+
 void loop()
 {
 	unsigned i = 0;
@@ -690,23 +772,67 @@ void loop()
 
 	for (i = BASE_ASSIGN_ADDR; i < assignAddr; i++)
 	{
+		uint8_t btnIdx = i - BASE_ASSIGN_ADDR;
+
 		if (btnStates[i] == BTN_STATE_PRESSED)
 		{
 			if (isConfigured())
 			{
-				led_obj_s *color = &ledsMap[i - BASE_ASSIGN_ADDR];
-				ledStrip.SetPixelColor(i - BASE_ASSIGN_ADDR, RgbColor(color->ledR, color->ledG, color->ledB));
+				led_obj_s *color = ledsMap[btnIdx];
+
+				if (color)
+				{
+					ledStrip.SetPixelColor(btnIdx, RgbColor(color->ledR, color->ledG, color->ledB));
+
+					continue;
+				}
 			}
-			else
-			{
-				ledStrip.SetPixelColor(i - BASE_ASSIGN_ADDR, RgbColor(0, 255, 0));
-			}
+
+			ledStrip.SetPixelColor(btnIdx, RgbColor(0, 255, 0));
 		}
 		else
 		{
-			ledStrip.SetPixelColor(i - BASE_ASSIGN_ADDR, RgbColor(0, 0, 255));
+			if (isConfigured())
+			{
+				struct animation_obj_s *animation = animationMap[btnIdx];
+
+				if (animation)
+				{
+					switch (animation->type)
+					{
+					case ANIMATION_GRADIENT:
+					{
+						ledStrip.SetPixelColor(btnIdx, Gradient(btnIdx));
+
+						continue;
+					}
+
+					case ANIMATION_PULSE:
+					{
+						ledStrip.SetPixelColor(btnIdx, Pulse(btnIdx));
+
+						continue;
+					}
+
+					case ANIMATION_STILL:
+					{
+						ledStrip.SetPixelColor(btnIdx, Still(btnIdx));
+						continue;
+					}
+
+					default:
+					{
+						break;
+					}
+					}
+				}
+			}
+
+			ledStrip.SetPixelColor(btnIdx, RgbColor(0, 0, 255));
 		}
 	}
+
+	animationCycle++;
 
 	ledStrip.Show();
 
@@ -727,14 +853,29 @@ void loop()
 
 	for (i = BASE_ASSIGN_ADDR; i < assignAddr; i++)
 	{
+		key_obj_s *obj = keyMap[i - BASE_ASSIGN_ADDR];
+
 		if (btnStates[i] == BTN_STATE_PRESSED)
 		{
 			// Serial.println("Btn #" + String(i) + " PRESSED: " + String(keyMap[0]) + " Map size: " + String(keyMapSize) + " parseState: " + String(parse_state) + " Config objects: " + String(config ? config->configObjNum : 0));
-			Keyboard.press(keyMap[i - BASE_ASSIGN_ADDR]);
+
+			// Press all buttons
+			while (obj)
+			{
+				Keyboard.press(obj->keyValue);
+
+				obj = obj->next;
+			}
 		}
 		else
 		{
-			Keyboard.release(keyMap[i - BASE_ASSIGN_ADDR]);
+			// Release all buttons
+			while (obj)
+			{
+				Keyboard.release(obj->keyValue);
+
+				obj = obj->next;
+			}
 		}
 	}
 }

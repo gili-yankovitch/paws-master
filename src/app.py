@@ -14,29 +14,46 @@ class Config:
     def __init__(self, objects):
         self.objects = objects
 
+    def objPad(self, obj):
+        OBJ_SIZE = 8
+        return obj + bytes([0] * (OBJ_SIZE - len(obj)))
+
     def encode(self):
         config = pack("<HH", CONFIG_MAGIC, len(self.objects)) + reduce(
-            lambda x, y: x + y, [config.encode() for config in self.objects]
+            lambda x, y: x + y,
+            [self.objPad(config.encode()) for config in self.objects],
         )
         return pack("<HH", 0x4141, len(config)) + config
 
 
+class ConfigObj:
+    def __init__(self, idx, type):
+        self.btnIdx = idx
+        self.type = type
+
+    def encode(self):
+        return pack("<BB", self.type, self.btnIdx)
+
+
 class ConfigKey:
-    def __init__(self, key):
+    def __init__(self, idx, key):
+        ConfigObj.__init__(self, idx, CONFIG_OBJ_TYPE_KEY)
+
         self.key = key
 
     def encode(self):
-        return pack("<BBH", CONFIG_OBJ_TYPE_KEY, self.key, 0)
+        return ConfigObj.encode(self) + pack("<B", self.key)
 
 
 class ConfigLED:
-    def __init__(self, r, g, b):
+    def __init__(self, idx, r, g, b):
+        ConfigObj.__init__(self, idx, CONFIG_OBJ_TYPE_LED)
         self.r = r
         self.g = g
         self.b = b
 
     def encode(self):
-        return pack("<BBBB", CONFIG_OBJ_TYPE_LED, self.r, self.g, self.b)
+        return ConfigObj.encode(self) + pack("<BBB", self.r, self.g, self.b)
 
 
 def portName(port):
@@ -72,9 +89,18 @@ def probePort():
 
 def main():
     # Create config
-    c = Config([ConfigKey(ord("a")), ConfigLED(0x66, 0x00, 0xCC)])
+    c = Config([ConfigKey(0, ord("a")), ConfigLED(0, 0x66, 0x00, 0xCC)])
 
     conf_data = c.encode()
+
+    data = ""
+
+    for x in conf_data:
+        data += "%02x " % x
+
+    print(data)
+
+    exit(1)
 
     s = probePort()
 
