@@ -12,13 +12,19 @@
 #define EEPROM_ADDR_CONFIG_SIZE 0x1
 #define EEPROM_ADDR_CONFIG_START 0x3
 
-#define SERIAL_RECV_MAGIC 0x4141
+#define SERIAL_RECV_CONFIG_MAGIC 0x4141
+#define SERIAL_SEND_CONNECTED_MODULES 0x4242
+#define SERIAL_SEND_PRESSES 0x4343
+#define SERIAL_SEND_PRESSES_RELEASE 0x4444
+
 struct serial_config_s
 {
 	uint16_t magic;
 	uint16_t size;
 	uint8_t data[0];
 };
+
+static bool sendBtnPressesOverSerial = false;
 
 #define LEDS_PIN 6
 #define TOKEN_RECV_PIN 4
@@ -63,13 +69,13 @@ enum btn_state_e
 
 #define BASE_ASSIGN_ADDR 2
 
-static enum btn_state_e *btnStates = NULL;
+static enum btn_state_e* btnStates = NULL;
 static uint8_t assignAddr = BASE_ASSIGN_ADDR;
 
 struct key_obj_s
 {
 	uint8_t keyValue;
-	struct key_obj_s *next;
+	struct key_obj_s* next;
 };
 
 struct led_obj_s
@@ -142,9 +148,9 @@ static unsigned tokenSentCnt;
 
 static size_t btnNum = 0;
 static uint16_t animationCycle = 0;
-static struct key_obj_s **keyMap = NULL;
-static struct led_obj_s **ledsMap = NULL;
-static struct animation_obj_s **animationMap = NULL;
+static struct key_obj_s** keyMap = NULL;
+static struct led_obj_s** ledsMap = NULL;
+static struct animation_obj_s** animationMap = NULL;
 
 NeoPixelBus<NeoGrbFeature, Neo800KbpsMethod> ledStrip(MAX_KEY_COUNT, LEDS_PIN);
 
@@ -174,7 +180,7 @@ static uint16_t eepromReadHWord(unsigned addr)
 	return data;
 }
 
-static void eepromDumpConfig(uint8_t *config, uint16_t size)
+static void eepromDumpConfig(uint8_t* config, uint16_t size)
 {
 	unsigned i;
 
@@ -200,7 +206,7 @@ static bool isConfigured()
 	return isConf;
 }
 
-static uint16_t eepromLoadConfig(uint8_t **config)
+static uint16_t eepromLoadConfig(uint8_t** config)
 {
 	uint16_t size = 0;
 	unsigned i;
@@ -216,7 +222,7 @@ static uint16_t eepromLoadConfig(uint8_t **config)
 	size = eepromReadHWord(EEPROM_ADDR_CONFIG_SIZE);
 
 	// Allocate data
-	*config = (uint8_t *)malloc(size);
+	*config = (uint8_t*)malloc(size);
 
 	// Read the data
 	for (i = 0; i < size; ++i)
@@ -228,7 +234,7 @@ error:
 	return size;
 }
 
-static size_t serialRecv(uint8_t *buf, size_t size, int flags)
+static size_t serialRecv(uint8_t* buf, size_t size, int flags)
 {
 	size_t read = 0;
 
@@ -248,15 +254,13 @@ static size_t serialRecv(uint8_t *buf, size_t size, int flags)
 	return read;
 }
 
-static int parseConfig(uint8_t *buf, size_t size)
+static int parseConfig(uint8_t* buf, size_t size)
 {
 	int err = -1;
 	uint16_t magic;
 	uint16_t objnum;
 	size_t i;
 	unsigned configObjId;
-
-	parse_state = __LINE__;
 
 	// Check magic
 	magic = (buf[CONFIG_MAGIC_IDX + 0] << 0) | (buf[CONFIG_MAGIC_IDX + 1] << 8);
@@ -268,8 +272,6 @@ static int parseConfig(uint8_t *buf, size_t size)
 		goto error;
 	}
 
-	parse_state = __LINE__;
-
 	// Get number of objects
 	objnum = (buf[CONFIG_OBJNUM_IDX + 0] << 0) | (buf[CONFIG_OBJNUM_IDX + 1] << 8);
 
@@ -277,12 +279,10 @@ static int parseConfig(uint8_t *buf, size_t size)
 	if (size != (CONFIG_MAGIC_SIZE + CONFIG_OBJNUM_SIZE + CONFIG_OBJ_SIZE * objnum))
 	{
 		Serial.println("Error parsing config: Invalid config sizes. Expected: " +
-					   String(CONFIG_MAGIC_SIZE + CONFIG_OBJNUM_SIZE + CONFIG_OBJ_SIZE * objnum) + " Got: " + String(size));
+			String(CONFIG_MAGIC_SIZE + CONFIG_OBJNUM_SIZE + CONFIG_OBJ_SIZE * objnum) + " Got: " + String(size));
 
 		goto error;
 	}
-
-	parse_state = __LINE__;
 
 	// Free previous config
 	if (config)
@@ -291,7 +291,7 @@ static int parseConfig(uint8_t *buf, size_t size)
 	}
 
 	// Allocate config
-	config = (struct config_s *)malloc(sizeof(struct config_s) + sizeof(struct config_obj_s) * objnum);
+	config = (struct config_s*)malloc(sizeof(struct config_s) + sizeof(struct config_obj_s) * objnum);
 
 	// Populate fields
 	config->configMagic = magic;
@@ -303,8 +303,6 @@ static int parseConfig(uint8_t *buf, size_t size)
 		uint8_t configType = buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_TYPE_OFFSET];
 		uint8_t btnIdx = buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_BTN_IDX_OFFSET];
 
-		parse_state = __LINE__;
-
 		if (btnIdx >= btnNum)
 		{
 			// Ignore this config - No such button idx.
@@ -313,65 +311,69 @@ static int parseConfig(uint8_t *buf, size_t size)
 
 		switch (configType)
 		{
-		case CONFIG_KEY:
-		{
-			uint8_t keyValue = buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_KEYVAL_IDX];
-
-			parse_state = __LINE__;
-
-			config->objects[configObjId].data.key.keyValue = keyValue;
-			config->objects[configObjId].data.key.next = NULL;
-
-			// Map keys
-			if (keyMap[btnIdx] == NULL)
+			case CONFIG_KEY:
 			{
-				keyMap[btnIdx] = &config->objects[configObjId].data.key;
-			}
-			else
-			{
-				struct key_obj_s *last = keyMap[btnIdx];
+				uint8_t keyValue = buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_KEYVAL_IDX];
 
-				// Find the last object to append to
-				while (last->next)
+				config->objects[configObjId].data.key.keyValue = keyValue;
+				config->objects[configObjId].data.key.next = NULL;
+
+				// Map keys
+				if (keyMap[btnIdx] == NULL)
 				{
-					last = last->next;
+					Serial.println("Setting button " + String(btnIdx) + " with object: " + String((unsigned int)&config->objects[configObjId].data.key, 16));
+
+					keyMap[btnIdx] = &config->objects[configObjId].data.key;
+				}
+				else
+				{
+					struct key_obj_s* last = keyMap[btnIdx];
+
+					// Find the last object to append to
+					while (last->next)
+					{
+						last = last->next;
+					}
+
+					last->next = &config->objects[configObjId].data.key;
 				}
 
-				last->next = &config->objects[configObjId].data.key;
+				break;
 			}
 
-			break;
-		}
+			case CONFIG_LED:
+			{
+				config->objects[configObjId].data.clickColor.ledR =
+					buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_R_IDX];
+				config->objects[configObjId].data.clickColor.ledG =
+					buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_G_IDX];
+				config->objects[configObjId].data.clickColor.ledB =
+					buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_B_IDX];
 
-		case CONFIG_LED:
-		{
-			config->objects[configObjId].data.clickColor.ledR =
-				buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_R_IDX];
-			config->objects[configObjId].data.clickColor.ledG =
-				buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_G_IDX];
-			config->objects[configObjId].data.clickColor.ledB =
-				buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_B_IDX];
+				ledsMap[btnIdx] = &config->objects[configObjId].data.clickColor;
 
-			ledsMap[btnIdx] = &config->objects[configObjId].data.clickColor;
+				break;
+			}
 
-			break;
-		}
+			case CONFIG_ANIMATION:
+			{
+				config->objects[configObjId].data.animation.color.ledR =
+					buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_R_IDX];
+				config->objects[configObjId].data.animation.color.ledG =
+					buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_G_IDX];
+				config->objects[configObjId].data.animation.color.ledB =
+					buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_B_IDX];
+				config->objects[configObjId].data.animation.type = (enum animation_type)
+					buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_ANIMATION];
 
-		case CONFIG_ANIMATION:
-		{
-			config->objects[configObjId].data.animation.color.ledR =
-				buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_R_IDX];
-			config->objects[configObjId].data.animation.color.ledG =
-				buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_G_IDX];
-			config->objects[configObjId].data.animation.color.ledB =
-				buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_B_IDX];
-			config->objects[configObjId].data.animation.type = (enum animation_type)
-				buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_ANIMATION];
-			break;
-		}
+				animationMap[btnIdx] = &config->objects[configObjId].data.animation;
 
-		default:
-			break;
+				break;
+			}
+
+			// Invalid config type
+			default:
+			continue;
 		}
 
 		config->objects[configObjId].btnIdx = btnIdx;
@@ -386,54 +388,22 @@ error:
 	return err;
 }
 
-static int handleSerialConfig()
+static int handleRecvConfig()
 {
 	int err = -1;
-	struct serial_config_s *data;
+	struct serial_config_s* data;
 	uint16_t magic;
 	uint16_t size;
 
-	if (!Serial.available())
-	{
-		goto done;
-	}
-
-	// Read data request
-	if (Serial.read() != 0x42)
-	{
-		Serial.println("Error receiving read request magic");
-
-		goto done;
-	}
-
-	// Write magic number so desktop can identify this as the correct port
-	Serial.write("\x42\x69");
-
-	// Receive magic
-	if (serialRecv((uint8_t *)&magic, sizeof(magic), O_NONBLOCK) != sizeof(uint16_t))
-	{
-		Serial.println("Error receiving magic number");
-
-		goto error;
-	}
-
-	// Verify magic
-	if (magic != SERIAL_RECV_MAGIC)
-	{
-		Serial.println("Invalid serial magic number");
-
-		goto error;
-	}
-
 	// Receive size
-	if (serialRecv((uint8_t *)&size, sizeof(uint16_t), O_NONBLOCK) != sizeof(uint16_t))
+	if (serialRecv((uint8_t*)&size, sizeof(uint16_t), O_NONBLOCK) != sizeof(uint16_t))
 	{
 		Serial.println("Error recveing config size");
 
 		goto error;
 	}
 
-	data = (struct serial_config_s *)malloc(sizeof(struct serial_config_s) + size);
+	data = (struct serial_config_s*)malloc(sizeof(struct serial_config_s) + size);
 
 	// Populate data
 	if (serialRecv(data->data, size, O_NONBLOCK) != size)
@@ -454,12 +424,93 @@ static int handleSerialConfig()
 		goto error;
 	}
 
-	Serial.print("\xFF");
-
 	// Dump config to eeprom
 	eepromDumpConfig(data->data, data->size);
 
 	free(data);
+
+	err = 0;
+error:
+	return err;
+}
+
+static int handleSerialConfig()
+{
+	int err = -1;
+	uint16_t magic;
+
+	if (!Serial.available())
+	{
+		goto done;
+	}
+
+	// Read data request
+	if (Serial.read() != 0x42)
+	{
+		// Serial.println("Error receiving read request magic");
+
+		goto done;
+	}
+
+	// Write magic number so desktop can identify this as the correct port
+	Serial.write("\x42\x69");
+
+	// Receive magic
+	if (serialRecv((uint8_t*)&magic, sizeof(magic), O_NONBLOCK) != sizeof(uint16_t))
+	{
+		Serial.println("Error receiving magic number");
+
+		goto error;
+	}
+
+	// Verify magic
+	switch (magic)
+	{
+		case SERIAL_RECV_CONFIG_MAGIC:
+		{
+			if (handleRecvConfig() < 0)
+			{
+				Serial.println("Invalid config");
+
+				goto error;
+			}
+
+			break;
+		}
+
+		case SERIAL_SEND_CONNECTED_MODULES:
+		{
+			// Send number of connected modules (max 255)
+			Serial.write((uint8_t*)&btnNum, 1);
+
+			break;
+		}
+
+		case SERIAL_SEND_PRESSES:
+		{
+			// Toggle
+			sendBtnPressesOverSerial = true;
+
+			break;
+		}
+
+		case SERIAL_SEND_PRESSES_RELEASE:
+		{
+			// Toggle
+			sendBtnPressesOverSerial = false;
+
+			break;
+		}
+
+		default:
+		{
+			Serial.println("Invalid serial magic number");
+
+			goto error;
+		}
+	}
+
+	Serial.print("\xFF");
 
 done:
 	err = 0;
@@ -470,7 +521,7 @@ error:
 static int configStartup()
 {
 	int err = -1;
-	uint8_t *config;
+	uint8_t* config;
 	uint16_t size;
 
 	// Try and get config
@@ -511,9 +562,6 @@ static void dataHandler(int size)
 
 	if (btnStates[addrRecvd] == recvState)
 		return;
-
-	// Serial.println("Received: " + String(addrRecvd));
-	// Serial.println("State: " + String(recvState));
 
 	btnStates[addrRecvd] = recvState;
 }
@@ -607,10 +655,10 @@ void initializeI2CAddrs()
 			{
 				Serial.println("Received ACK from " + String(ack));
 
-				btnStates = (enum btn_state_e *)realloc(btnStates, sizeof(enum btn_state_e) * (assignAddr + 1));
-				keyMap = (struct key_obj_s **)realloc(keyMap, sizeof(struct key_obj_s *) * (btnNum + 1));
-				ledsMap = (struct led_obj_s **)realloc(keyMap, sizeof(struct led_obj_s *) * (btnNum + 1));
-				animationMap = (struct animation_obj_s **)realloc(keyMap, sizeof(struct animation_obj_s *) * (btnNum + 1));
+				btnStates = (enum btn_state_e*)realloc(btnStates, sizeof(enum btn_state_e) * (assignAddr + 1));
+				keyMap = (struct key_obj_s**)realloc(keyMap, sizeof(struct key_obj_s*) * (btnNum + 1));
+				ledsMap = (struct led_obj_s**)realloc(ledsMap, sizeof(struct led_obj_s*) * (btnNum + 1));
+				animationMap = (struct animation_obj_s**)realloc(animationMap, sizeof(struct animation_obj_s*) * (btnNum + 1));
 
 				// Reset this new cell
 				keyMap[btnNum] = NULL;
@@ -714,7 +762,7 @@ void setup()
 
 static RgbColor Gradient(uint8_t btnIdx)
 {
-	uint8_t WheelPos = 255 - (((btnIdx * 256 / btnNum) + animationCycle) & 0xFF);
+	uint8_t WheelPos = 255 - (((btnIdx * 256 / btnNum) + (animationCycle >> 2)) & 0xFF);
 
 	if (WheelPos < 85)
 	{
@@ -735,19 +783,20 @@ static RgbColor Gradient(uint8_t btnIdx)
 static RgbColor Pulse(uint8_t btnIdx)
 {
 	uint8_t cycle;
+	uint16_t animationCycleLocal = (animationCycle >> 2);
 
-	if ((animationCycle % 512) < 256)
+	if ((animationCycleLocal % 512) < 256)
 	{
-		cycle = animationCycle & 0xff;
+		cycle = animationCycleLocal & 0xff;
 	}
 	else
 	{
-		cycle = 255 - (animationCycle & 0xff);
+		cycle = 255 - (animationCycleLocal & 0xff);
 	}
 
-	uint32_t r = ledsMap[btnIdx]->ledR;
-	uint32_t g = ledsMap[btnIdx]->ledG;
-	uint32_t b = ledsMap[btnIdx]->ledB;
+	uint32_t r = animationMap[btnIdx]->color.ledR;
+	uint32_t g = animationMap[btnIdx]->color.ledG;
+	uint32_t b = animationMap[btnIdx]->color.ledB;
 
 	r *= cycle;
 	g *= cycle;
@@ -778,7 +827,7 @@ void loop()
 		{
 			if (isConfigured())
 			{
-				led_obj_s *color = ledsMap[btnIdx];
+				led_obj_s* color = ledsMap[btnIdx];
 
 				if (color)
 				{
@@ -794,36 +843,36 @@ void loop()
 		{
 			if (isConfigured())
 			{
-				struct animation_obj_s *animation = animationMap[btnIdx];
+				struct animation_obj_s* animation = animationMap[btnIdx];
 
 				if (animation)
 				{
 					switch (animation->type)
 					{
-					case ANIMATION_GRADIENT:
-					{
-						ledStrip.SetPixelColor(btnIdx, Gradient(btnIdx));
+						case ANIMATION_GRADIENT:
+						{
+							ledStrip.SetPixelColor(btnIdx, Gradient(btnIdx));
 
-						continue;
-					}
+							continue;
+						}
 
-					case ANIMATION_PULSE:
-					{
-						ledStrip.SetPixelColor(btnIdx, Pulse(btnIdx));
+						case ANIMATION_PULSE:
+						{
+							ledStrip.SetPixelColor(btnIdx, Pulse(btnIdx));
 
-						continue;
-					}
+							continue;
+						}
 
-					case ANIMATION_STILL:
-					{
-						ledStrip.SetPixelColor(btnIdx, Still(btnIdx));
-						continue;
-					}
+						case ANIMATION_STILL:
+						{
+							ledStrip.SetPixelColor(btnIdx, Still(btnIdx));
+							continue;
+						}
 
-					default:
-					{
-						break;
-					}
+						default:
+						{
+							break;
+						}
 					}
 				}
 			}
@@ -853,15 +902,25 @@ void loop()
 
 	for (i = BASE_ASSIGN_ADDR; i < assignAddr; i++)
 	{
-		key_obj_s *obj = keyMap[i - BASE_ASSIGN_ADDR];
+		uint8_t btnIdx = i - BASE_ASSIGN_ADDR;
+		key_obj_s* obj = keyMap[btnIdx];
 
 		if (btnStates[i] == BTN_STATE_PRESSED)
 		{
-			// Serial.println("Btn #" + String(i) + " PRESSED: " + String(keyMap[0]) + " Map size: " + String(keyMapSize) + " parseState: " + String(parse_state) + " Config objects: " + String(config ? config->configObjNum : 0));
+			// If app requests sending indexes - send instread of press
+			if (sendBtnPressesOverSerial)
+			{
+				Serial.write(&btnIdx, sizeof(btnIdx));
+
+				continue;
+			}
 
 			// Press all buttons
 			while (obj)
 			{
+				// Serial.println(String(__LINE__) + " Button idx: " + String(btnIdx) + " Ptr: 0x" + String((unsigned int)obj, 16) + " Key value: " + String(obj->keyValue) + " Number of configs: " + String(config->configObjNum));
+				// Serial.println("Key value: " + String(config->objects[0].data.key.keyValue) + " Key object: " + String((unsigned int)&config->objects[0].data, 16));
+
 				Keyboard.press(obj->keyValue);
 
 				obj = obj->next;
@@ -872,6 +931,7 @@ void loop()
 			// Release all buttons
 			while (obj)
 			{
+
 				Keyboard.release(obj->keyValue);
 
 				obj = obj->next;
