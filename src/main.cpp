@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <stdint.h>
 #include <Arduino.h>
 #include <EEPROM.h>
@@ -75,6 +76,8 @@ static uint8_t assignAddr = BASE_ASSIGN_ADDR;
 struct key_obj_s
 {
 	uint8_t keyValue;
+	unsigned long cooldown;
+	unsigned long tick;
 	struct key_obj_s* next;
 };
 
@@ -121,7 +124,9 @@ struct config_s
 	uint16_t configMagic;
 	uint16_t configObjNum;
 	struct config_obj_s objects[0];
-} *config = NULL;
+};
+
+struct config_s* config = NULL;
 
 // ***** CONFIG PROTOCOL DEFINITION *****
 // Protocol is little-endian ints
@@ -261,6 +266,8 @@ static int parseConfig(uint8_t* buf, size_t size)
 	uint16_t objnum;
 	size_t i;
 	unsigned configObjId;
+	struct config_s* nuconfig;
+	struct config_s* oldconfig;
 
 	// Check magic
 	magic = (buf[CONFIG_MAGIC_IDX + 0] << 0) | (buf[CONFIG_MAGIC_IDX + 1] << 8);
@@ -284,21 +291,24 @@ static int parseConfig(uint8_t* buf, size_t size)
 		goto error;
 	}
 
-	// Free previous config
-	if (config)
-	{
-		free(config);
-	}
-
 	// Allocate config
-	config = (struct config_s*)malloc(sizeof(struct config_s) + sizeof(struct config_obj_s) * objnum);
+	nuconfig = (struct config_s*)malloc(sizeof(struct config_s) + sizeof(struct config_obj_s) * objnum);
 
 	// Populate fields
-	config->configMagic = magic;
-	config->configObjNum = objnum;
+	nuconfig->configMagic = magic;
+	nuconfig->configObjNum = objnum;
+
+	// Reset previous keys/led/animation configs
+	for (i = 0; i < btnNum; ++i)
+	{
+		keyMap[i] = NULL;
+		ledsMap[i] = NULL;
+		animationMap[i] = NULL;
+
+	}
 
 	// Populate objects
-	for (i = 0, configObjId = 0; i < config->configObjNum; ++i)
+	for (i = 0, configObjId = 0; i < nuconfig->configObjNum; ++i)
 	{
 		uint8_t configType = buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_TYPE_OFFSET];
 		uint8_t btnIdx = buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_BTN_IDX_OFFSET];
@@ -315,15 +325,17 @@ static int parseConfig(uint8_t* buf, size_t size)
 			{
 				uint8_t keyValue = buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_KEYVAL_IDX];
 
-				config->objects[configObjId].data.key.keyValue = keyValue;
-				config->objects[configObjId].data.key.next = NULL;
+				nuconfig->objects[configObjId].data.key.keyValue = keyValue;
+				nuconfig->objects[configObjId].data.key.cooldown = 0;
+				nuconfig->objects[configObjId].data.key.tick = 0;
+				nuconfig->objects[configObjId].data.key.next = NULL;
 
 				// Map keys
 				if (keyMap[btnIdx] == NULL)
 				{
-					Serial.println("Setting button " + String(btnIdx) + " with object: " + String((unsigned int)&config->objects[configObjId].data.key, 16));
+					// Serial.println("Setting button " + String(btnIdx) + " with object: " + String((unsigned int)&nuconfig->objects[configObjId].data.key, 16));
 
-					keyMap[btnIdx] = &config->objects[configObjId].data.key;
+					keyMap[btnIdx] = &nuconfig->objects[configObjId].data.key;
 				}
 				else
 				{
@@ -335,7 +347,7 @@ static int parseConfig(uint8_t* buf, size_t size)
 						last = last->next;
 					}
 
-					last->next = &config->objects[configObjId].data.key;
+					last->next = &nuconfig->objects[configObjId].data.key;
 				}
 
 				break;
@@ -343,30 +355,30 @@ static int parseConfig(uint8_t* buf, size_t size)
 
 			case CONFIG_LED:
 			{
-				config->objects[configObjId].data.clickColor.ledR =
+				nuconfig->objects[configObjId].data.clickColor.ledR =
 					buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_R_IDX];
-				config->objects[configObjId].data.clickColor.ledG =
+				nuconfig->objects[configObjId].data.clickColor.ledG =
 					buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_G_IDX];
-				config->objects[configObjId].data.clickColor.ledB =
+				nuconfig->objects[configObjId].data.clickColor.ledB =
 					buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_B_IDX];
 
-				ledsMap[btnIdx] = &config->objects[configObjId].data.clickColor;
+				ledsMap[btnIdx] = &nuconfig->objects[configObjId].data.clickColor;
 
 				break;
 			}
 
 			case CONFIG_ANIMATION:
 			{
-				config->objects[configObjId].data.animation.color.ledR =
+				nuconfig->objects[configObjId].data.animation.color.ledR =
 					buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_R_IDX];
-				config->objects[configObjId].data.animation.color.ledG =
+				nuconfig->objects[configObjId].data.animation.color.ledG =
 					buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_G_IDX];
-				config->objects[configObjId].data.animation.color.ledB =
+				nuconfig->objects[configObjId].data.animation.color.ledB =
 					buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_B_IDX];
-				config->objects[configObjId].data.animation.type = (enum animation_type)
+				nuconfig->objects[configObjId].data.animation.type = (enum animation_type)
 					buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_LED_ANIMATION];
 
-				animationMap[btnIdx] = &config->objects[configObjId].data.animation;
+				animationMap[btnIdx] = &nuconfig->objects[configObjId].data.animation;
 
 				break;
 			}
@@ -376,11 +388,27 @@ static int parseConfig(uint8_t* buf, size_t size)
 			continue;
 		}
 
-		config->objects[configObjId].btnIdx = btnIdx;
-		config->objects[configObjId].type = configType;
+		nuconfig->objects[configObjId].btnIdx = btnIdx;
+		nuconfig->objects[configObjId].type = configType;
+
+		// Serial.println("Configured object #" + String(configObjId));
 
 		// Valid config. Advance...
 		configObjId++;
+	}
+
+	// Free previous config
+	if (config)
+	{
+		oldconfig = config;
+	}
+
+	// Replace config
+	config = nuconfig;
+
+	if (oldconfig)
+	{
+		free(oldconfig);
 	}
 
 	err = 0;
@@ -510,7 +538,7 @@ static int handleSerialConfig()
 		}
 	}
 
-	Serial.print("\xFF");
+	Serial.write("\xFF");
 
 done:
 	err = 0;
@@ -905,8 +933,12 @@ void loop()
 		uint8_t btnIdx = i - BASE_ASSIGN_ADDR;
 		key_obj_s* obj = keyMap[btnIdx];
 
+
 		if (btnStates[i] == BTN_STATE_PRESSED)
 		{
+			unsigned long diff = millis() - obj->tick;
+			unsigned long now = millis();
+
 			// If app requests sending indexes - send instread of press
 			if (sendBtnPressesOverSerial)
 			{
@@ -921,7 +953,37 @@ void loop()
 				// Serial.println(String(__LINE__) + " Button idx: " + String(btnIdx) + " Ptr: 0x" + String((unsigned int)obj, 16) + " Key value: " + String(obj->keyValue) + " Number of configs: " + String(config->configObjNum));
 				// Serial.println("Key value: " + String(config->objects[0].data.key.keyValue) + " Key object: " + String((unsigned int)&config->objects[0].data, 16));
 
-				Keyboard.press(obj->keyValue);
+				// Only when cooldown is 0, press again
+				if (obj->cooldown <= 1)
+				{
+					Keyboard.press(obj->keyValue);
+					Keyboard.release(obj->keyValue);
+
+					// First press is longer
+					if (obj->cooldown == 0)
+					{
+						obj->cooldown = 300;
+					}
+					// Subsequent are quicker
+					else if (obj->cooldown == 1)
+					{
+						obj->cooldown = 30;
+					}
+				}
+				else
+				{
+					// Reset, prevent underflow
+					if (diff >= obj->cooldown)
+					{
+						obj->cooldown = 1;
+					}
+					else
+					{
+						obj->cooldown -= diff;
+					}
+				}
+
+				obj->tick = now;
 
 				obj = obj->next;
 			}
@@ -933,6 +995,9 @@ void loop()
 			{
 
 				Keyboard.release(obj->keyValue);
+
+				obj->cooldown = 0;
+				obj->tick = 0;
 
 				obj = obj->next;
 			}
