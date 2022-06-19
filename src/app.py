@@ -11,6 +11,20 @@ CONFIG_OBJ_TYPE_LED = 0x2
 CONFIG_OBJ_TYPE_ANIMATION = 0x3
 
 
+KEY_CODE_LCTRL = 0x80
+KEY_CODE_LSHIFT = 0x81
+
+KEY_CODE_UP_ARROW = 0xDA
+KEY_CODE_DOWN_ARROW = 0xD9
+KEY_CODE_LEFT_ARROW = 0xD8
+KEY_CODE_RIGHT_ARROW = 0xD7
+KEY_CODE_PLAYPAUSE = ord(" ")
+KEY_CODE_MUTE = 0x74
+
+KEY_CODE_VOLUME_UP = 72
+KEY_CODE_VOLUME_DOWN = 73
+
+
 class Config:
     OBJ_SIZE = 8
     SERIAL_WRITE_CONFIG_MAGIC = 0x4141
@@ -39,13 +53,17 @@ class ConfigObj:
 
 
 class ConfigKey:
-    def __init__(self, idx, key):
+    PRESS_TYPE_ONCE = 0
+    PRESS_TYPE_CONT = 1
+
+    def __init__(self, idx, key, press_type=PRESS_TYPE_CONT):
         ConfigObj.__init__(self, idx, CONFIG_OBJ_TYPE_KEY)
 
         self.key = key
+        self.press_type = press_type
 
     def encode(self):
-        return ConfigObj.encode(self) + pack("<B", self.key)
+        return ConfigObj.encode(self) + pack("<BB", self.key, self.press_type)
 
 
 class ConfigColor:
@@ -131,15 +149,22 @@ def probePort(n=None):
     return None
 
 
+def writeData(s, data):
+    s.write(data)
+
+
 def writeConfig(s, c):
     # Write config
-    s.write(c.encode())
+    # s.write(c.encode())
+    writeData(s, c.encode())
 
     # Try reading
     data = s.read(1024)
 
     if data != b"\xff":
-        print("Error writing config: " + data)
+        print(
+            "Error writing config (%d): '%s'" % (len(data), data.decode("ascii") + "'")
+        )
 
         return False
 
@@ -189,7 +214,7 @@ def readNumberOfModules(s):
     return int(num[0])
 
 
-def main():
+def functions():
     s = probePort("ttyS22")
 
     if s is None:
@@ -234,12 +259,34 @@ def main():
 
     exit(1)
 
+
+def main():
+    # s = probePort("ttyS22")
+    s = probePort("COM22")
+
     # Create config
     c = Config(
         [
-            ConfigKey(0, ord("a")),
-            ConfigLED(0, ConfigColor(0xFF, 0x00, 0x00)),
+            ConfigKey(0, KEY_CODE_PLAYPAUSE),
+            ConfigLED(0, ConfigColor(0xCC, 0x00, 0x55)),
             ConfigAnimation(0, ConfigAnimation.GRADIENT),
+            ConfigKey(1, KEY_CODE_LCTRL, press_type=ConfigKey.PRESS_TYPE_ONCE),
+            ConfigKey(1, KEY_CODE_LSHIFT, press_type=ConfigKey.PRESS_TYPE_ONCE),
+            ConfigKey(1, ord("m"), press_type=ConfigKey.PRESS_TYPE_ONCE),
+            ConfigLED(1, ConfigColor(0xCC, 0x00, 0x55)),
+            ConfigAnimation(1, ConfigAnimation.GRADIENT),
+            ConfigKey(2, KEY_CODE_UP_ARROW),
+            ConfigLED(2, ConfigColor(0xCC, 0x00, 0x55)),
+            ConfigAnimation(2, ConfigAnimation.GRADIENT),
+            ConfigKey(3, KEY_CODE_DOWN_ARROW),
+            ConfigLED(3, ConfigColor(0xCC, 0x00, 0x55)),
+            ConfigAnimation(3, ConfigAnimation.GRADIENT),
+            ConfigKey(4, KEY_CODE_RIGHT_ARROW),
+            ConfigLED(4, ConfigColor(0xCC, 0x00, 0x55)),
+            ConfigAnimation(4, ConfigAnimation.GRADIENT),
+            ConfigKey(5, KEY_CODE_LEFT_ARROW),
+            ConfigLED(5, ConfigColor(0xCC, 0x00, 0x55)),
+            ConfigAnimation(5, ConfigAnimation.GRADIENT),
         ]
     )
 
@@ -262,3 +309,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # functions()

@@ -50,6 +50,7 @@ unsigned int parse_state = 0;
 #define CONFIG_OBJ_DATA_OFFSET (CONFIG_OBJ_BTN_IDX_OFFSET + CONFIG_OBJ_BTN_IDX_SIZE)
 
 #define CONFIG_OBJ_KEYVAL_IDX (0)
+#define CONFIG_OBJ_KEYVAL_PRESS_TYPE (1)
 
 #define CONFIG_OBJ_LED_R_IDX (0)
 #define CONFIG_OBJ_LED_G_IDX (1)
@@ -68,6 +69,12 @@ enum btn_state_e
 	BTN_STATE_PRESSED
 };
 
+enum btn_press_type_e
+{
+	BTN_PRESS_TYPE_ONCE = 0,
+	BTN_PRESS_TYPE_CONT
+};
+
 #define BASE_ASSIGN_ADDR 2
 
 static enum btn_state_e* btnStates = NULL;
@@ -76,6 +83,7 @@ static uint8_t assignAddr = BASE_ASSIGN_ADDR;
 struct key_obj_s
 {
 	uint8_t keyValue;
+	enum btn_press_type_e press_type;
 	unsigned long cooldown;
 	unsigned long tick;
 	struct key_obj_s* next;
@@ -239,14 +247,14 @@ error:
 	return size;
 }
 
-static size_t serialRecv(uint8_t* buf, size_t size, int flags)
+static int serialRecv(uint8_t* buf, size_t size, int flags = 0)
 {
-	size_t read = 0;
-
 	if (flags & O_NONBLOCK)
 	{
-		return Serial.readBytes(buf, size);
+		return Serial.readBytes(buf, size) != size ? -1 : 0;
 	}
+
+	size_t read = 0;
 
 	while (read != size)
 	{
@@ -256,7 +264,7 @@ static size_t serialRecv(uint8_t* buf, size_t size, int flags)
 		read += Serial.readBytes(buf + read, size - read);
 	}
 
-	return read;
+	return 0;
 }
 
 static int parseConfig(uint8_t* buf, size_t size)
@@ -324,8 +332,10 @@ static int parseConfig(uint8_t* buf, size_t size)
 			case CONFIG_KEY:
 			{
 				uint8_t keyValue = buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_KEYVAL_IDX];
+				uint8_t press_type = buf[CONFIG_OBJARR_IDX + i * CONFIG_OBJ_SIZE + CONFIG_OBJ_DATA_OFFSET + CONFIG_OBJ_KEYVAL_PRESS_TYPE];
 
 				nuconfig->objects[configObjId].data.key.keyValue = keyValue;
+				nuconfig->objects[configObjId].data.key.press_type = (press_type == 0) ? BTN_PRESS_TYPE_ONCE : BTN_PRESS_TYPE_CONT;
 				nuconfig->objects[configObjId].data.key.cooldown = 0;
 				nuconfig->objects[configObjId].data.key.tick = 0;
 				nuconfig->objects[configObjId].data.key.next = NULL;
@@ -424,7 +434,7 @@ static int handleRecvConfig()
 	uint16_t size;
 
 	// Receive size
-	if (serialRecv((uint8_t*)&size, sizeof(uint16_t), O_NONBLOCK) != sizeof(uint16_t))
+	if (serialRecv((uint8_t*)&size, sizeof(uint16_t)) < 0)
 	{
 		Serial.println("Error recveing config size");
 
@@ -434,7 +444,7 @@ static int handleRecvConfig()
 	data = (struct serial_config_s*)malloc(sizeof(struct serial_config_s) + size);
 
 	// Populate data
-	if (serialRecv(data->data, size, O_NONBLOCK) != size)
+	if (serialRecv(data->data, size) < 0)
 	{
 		Serial.println("Error receiving config data");
 
@@ -484,7 +494,7 @@ static int handleSerialConfig()
 	Serial.write("\x42\x69");
 
 	// Receive magic
-	if (serialRecv((uint8_t*)&magic, sizeof(magic), O_NONBLOCK) != sizeof(uint16_t))
+	if (serialRecv((uint8_t*)&magic, sizeof(magic)) < 0)
 	{
 		Serial.println("Error receiving magic number");
 
@@ -905,7 +915,7 @@ void loop()
 				}
 			}
 
-			ledStrip.SetPixelColor(btnIdx, RgbColor(0, 0, 255));
+			ledStrip.SetPixelColor(btnIdx, RgbColor(255, 0, 0));
 		}
 	}
 
@@ -954,32 +964,45 @@ void loop()
 				// Serial.println("Key value: " + String(config->objects[0].data.key.keyValue) + " Key object: " + String((unsigned int)&config->objects[0].data, 16));
 
 				// Only when cooldown is 0, press again
-				if (obj->cooldown <= 1)
+				if (obj->press_type == BTN_PRESS_TYPE_ONCE)
 				{
-					Keyboard.press(obj->keyValue);
-					Keyboard.release(obj->keyValue);
-
-					// First press is longer
 					if (obj->cooldown == 0)
 					{
-						obj->cooldown = 300;
-					}
-					// Subsequent are quicker
-					else if (obj->cooldown == 1)
-					{
-						obj->cooldown = 30;
+						Keyboard.press(obj->keyValue);
+
+						// Don't press again
+						obj->cooldown = 1;
 					}
 				}
 				else
 				{
-					// Reset, prevent underflow
-					if (diff >= obj->cooldown)
+					if (obj->cooldown <= 1)
 					{
-						obj->cooldown = 1;
+						Keyboard.press(obj->keyValue);
+						Keyboard.release(obj->keyValue);
+
+						// First press is longer
+						if (obj->cooldown == 0)
+						{
+							obj->cooldown = 300;
+						}
+						// Subsequent are quicker
+						else if (obj->cooldown == 1)
+						{
+							obj->cooldown = 30;
+						}
 					}
 					else
 					{
-						obj->cooldown -= diff;
+						// Reset, prevent underflow
+						if (diff >= obj->cooldown)
+						{
+							obj->cooldown = 1;
+						}
+						else
+						{
+							obj->cooldown -= diff;
+						}
 					}
 				}
 
