@@ -247,24 +247,39 @@ error:
 	return size;
 }
 
+#define TIMEOUT_MS 1000
+
 static int serialRecv(uint8_t* buf, size_t size, int flags = 0)
 {
-	if (flags & O_NONBLOCK)
-	{
-		return Serial.readBytes(buf, size) != size ? -1 : 0;
-	}
-
+	int err = -1;
 	size_t read = 0;
+	unsigned long last_read = millis();
+
+	if ((flags & O_NONBLOCK) && (Serial.readBytes(buf, size) != size))
+	{
+		goto error;
+	}
 
 	while (read != size)
 	{
-		while (!Serial.available())
+		while ((!Serial.available()) && (millis() - last_read < TIMEOUT_MS))
 			;
 
+		// Did I quit the loop with nothing to read?
+		if (!Serial.available())
+		{
+			goto error;
+		}
+
 		read += Serial.readBytes(buf + read, size - read);
+
+		// Mark the last read
+		last_read = millis();
 	}
 
-	return 0;
+	err = 0;
+error:
+	return err;
 }
 
 static int parseConfig(uint8_t* buf, size_t size)
@@ -275,7 +290,6 @@ static int parseConfig(uint8_t* buf, size_t size)
 	size_t i;
 	unsigned configObjId;
 	struct config_s* nuconfig;
-	struct config_s* oldconfig;
 
 	// Check magic
 	magic = (buf[CONFIG_MAGIC_IDX + 0] << 0) | (buf[CONFIG_MAGIC_IDX + 1] << 8);
@@ -300,7 +314,7 @@ static int parseConfig(uint8_t* buf, size_t size)
 	}
 
 	// Allocate config
-	nuconfig = (struct config_s*)malloc(sizeof(struct config_s) + sizeof(struct config_obj_s) * objnum);
+	nuconfig = (struct config_s*)realloc(config, sizeof(struct config_s) + sizeof(struct config_obj_s) * objnum);
 
 	// Populate fields
 	nuconfig->configMagic = magic;
@@ -407,19 +421,7 @@ static int parseConfig(uint8_t* buf, size_t size)
 		configObjId++;
 	}
 
-	// Free previous config
-	if (config)
-	{
-		oldconfig = config;
-	}
-
-	// Replace config
 	config = nuconfig;
-
-	if (oldconfig)
-	{
-		free(oldconfig);
-	}
 
 	err = 0;
 error:
