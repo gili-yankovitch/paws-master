@@ -867,6 +867,14 @@ void loop()
 		{
 			if (isConfigured())
 			{
+				// Override during configuration phase
+				if (sendBtnPressesOverSerial)
+				{
+					ledStrip.SetPixelColor(btnIdx, RgbColor(0, 0, 255));
+
+					continue;
+				}
+
 				led_obj_s* color = ledsMap[btnIdx];
 
 				if (color)
@@ -884,6 +892,14 @@ void loop()
 			if (isConfigured())
 			{
 				struct animation_obj_s* animation = animationMap[btnIdx];
+
+				// Override during configuration phase
+				if (sendBtnPressesOverSerial)
+				{
+					ledStrip.SetPixelColor(btnIdx, RgbColor(255, 255, 255));
+
+					continue;
+				}
 
 				if (animation)
 				{
@@ -926,7 +942,7 @@ void loop()
 	ledStrip.Show();
 
 	// Always try and update config
-	if (millis() - prevReconfigMillis >= 1000)
+	if (millis() - prevReconfigMillis >= 200)
 	{
 		handleSerialConfig();
 
@@ -955,6 +971,8 @@ void loop()
 			if (sendBtnPressesOverSerial)
 			{
 				Serial.write(&btnIdx, sizeof(btnIdx));
+
+				sendBtnPressesOverSerial = false;
 
 				continue;
 			}

@@ -24,6 +24,8 @@ KEY_CODE_MUTE = 0x74
 KEY_CODE_VOLUME_UP = 72
 KEY_CODE_VOLUME_DOWN = 73
 
+lastPort = None
+
 
 class Config:
     OBJ_SIZE = 8
@@ -111,9 +113,6 @@ def portName(port):
 
 
 def tryProbing(s):
-    # Reset previous transaction if there was any
-    s.readall()
-
     # Write something
     s.write(bytes([0x42]))
 
@@ -130,14 +129,22 @@ def tryProbing(s):
 
 
 def probePort(n=None):
+    global lastPort
+
+    # Remember the last port I used
+    if n is None and lastPort is not None:
+        n = lastPort
+
     if n is not None:
         return tryProbing(Serial(portName(n), 115200, timeout=4))
 
     for p in serial.tools.list_ports.comports():
         try:
+            print("Trying %s" % p.name)
             s = Serial(portName(p.name), 115200, timeout=4)
 
             if tryProbing(s) is not None:
+                lastPort = s.name
                 return s
 
             s.close()
@@ -160,6 +167,8 @@ def writeConfig(s, c):
 
     # Try reading
     data = s.read(1024)
+
+    print("Response:", data)
 
     if data != b"\xff":
         print(
@@ -215,7 +224,7 @@ def readNumberOfModules(s):
 
 
 def functions():
-    s = probePort("ttyS22")
+    s = probePort("COM22")
 
     if s is None:
         print("Could not find port")
@@ -229,6 +238,8 @@ def functions():
     print("Number of modules: %d" % num)
 
     s.close()
+
+    return
 
     s = probePort("ttyS22")
 
