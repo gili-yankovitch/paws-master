@@ -1,9 +1,10 @@
-<!DOCTYPE html>
 <html>
 
 <head lang="en">
    <meta charset="UTF-8">
    <script src="https://code.jquery.com/jquery-3.6.0.js"></script>
+   <link rel="stylesheet" href="https://unpkg.com/huebee@2/dist/huebee.min.css">
+   <script src="https://unpkg.com/huebee@2/dist/huebee.pkgd.min.js"></script>
 </head>
 
 <body>
@@ -12,9 +13,9 @@
    <input type="button" id="configureBtn" value="Configure Key..."
       style="display: block; margin: auto; padding: 10px 50px 10px 50px; border-radius: 5px; border-color:darkgray" />
    <script>
-      btnSize = 100;
-      btnInnerSize = 80;
-
+      var btnSize = 100;
+      var btnInnerSize = 80;
+      var screenWidth = 570;
       var defaultOuterColor = "#d0d0d0";
 
       c = document.getElementById("canvas");
@@ -68,6 +69,248 @@
          }
       }
 
+      function createConfigWindow(width, height) {
+         w = document.createElement("div");
+         w.setAttribute("style", "width: " + width + "px; height: " + height + "px; position: absolute; top: 0px; left: 0px; background-color: #ffffff");
+         w.setAttribute("id", "configWindow");
+
+         content = document.createElement("div");
+         content.setAttribute("style", "display: block; margin: auto; padding: 10px; background-color: #d0d0d0; font-family: Arial");
+
+         title = document.createElement("div");
+         title.setAttribute("style", "font-size: 14pt; font-weight: bold; margin: 10px;");
+
+         titleCaption = document.createElement("span");
+         titleCaption.innerText = "Configure Button #";
+
+         titleCaptionBtnIdx = document.createElement("span");
+         titleCaptionBtnIdx.setAttribute("id", "titleCaptionBtnIdx");
+         titleCaptionBtnIdx.innerText = "###";
+
+         title.appendChild(titleCaption);
+         title.appendChild(titleCaptionBtnIdx);
+
+         pressColor = document.createElement("div");
+         pressColor.setAttribute("style", "font-size: 10pt; font-weight: bold; margin: 10px;");
+
+         pressColorCaption = document.createElement("span");
+         pressColorCaption.innerText = "Press Color: "
+
+         pressColorInput = document.createElement("input");
+         pressColorInput.setAttribute("value", "#cc00ff");
+         pressColorInput.setAttribute("id", "pressColorInput");
+         pressColorInput.setAttribute("class", "text-input");
+         pressColorInput.setAttribute("data-huebee", "{ \"saturations\": 1, \"hues\":6}");
+
+         pressColor.appendChild(pressColorCaption);
+         pressColor.appendChild(pressColorInput);
+
+         animation = document.createElement("div");
+         animation.setAttribute("style", "font-size: 10pt; font-weight: bold; margin: 10px;");
+
+         animationCaption = document.createElement("span");
+         animationCaption.innerText = "Animation: ";
+
+         animationInputGradient = document.createElement("input");
+         animationInputGradient.setAttribute("name", "animationType");
+         animationInputGradient.setAttribute("value", "gradient");
+         animationInputGradient.setAttribute("id", "gradient");
+         animationInputGradient.setAttribute("type", "radio");
+
+         animationInputGradient.addEventListener("change", (event) => {
+            $("#animationColorCaption")[0].style.visibility = "hidden";
+            $("#animationColorInput")[0].style.visibility = "hidden";
+         });
+
+         animationInputGradientLabel = document.createElement("label");
+         animationInputGradientLabel.setAttribute("for", "gradient");
+         animationInputGradientLabel.innerText = "Gradient";
+
+         animationInputPulse = document.createElement("input");
+         animationInputPulse.setAttribute("name", "animationType");
+         animationInputPulse.setAttribute("value", "pulse");
+         animationInputPulse.setAttribute("id", "pulse");
+         animationInputPulse.setAttribute("type", "radio");
+
+         animationInputPulse.addEventListener("change", (event) => {
+            $("#animationColorCaption")[0].style.visibility = "visible";
+            $("#animationColorInput")[0].style.visibility = "visible";
+         });
+
+         animationInputPulseLabel = document.createElement("label");
+         animationInputPulseLabel.setAttribute("for", "pulse");
+         animationInputPulseLabel.innerText = "Pulse";
+
+         animationInputStill = document.createElement("input");
+         animationInputStill.setAttribute("name", "animationType");
+         animationInputStill.setAttribute("value", "still");
+         animationInputStill.setAttribute("id", "still");
+         animationInputStill.setAttribute("type", "radio");
+
+         animationInputStill.addEventListener("change", (event) => {
+            $("#animationColorCaption")[0].style.visibility = "visible";
+            $("#animationColorInput")[0].style.visibility = "visible";
+         });
+
+         animationInputStillLabel = document.createElement("label");
+         animationInputStillLabel.setAttribute("for", "still");
+         animationInputStillLabel.innerText = "Still";
+
+         animationColorCaption = document.createElement("span");
+         animationColorCaption.setAttribute("id", "animationColorCaption");
+         animationColorCaption.innerText = "Animation Color: ";
+         animationColorCaption.style.marginLeft = "10px";
+
+         animationColorInput = document.createElement("input");
+         animationColorInput.setAttribute("value", "#0000ff");
+         animationColorInput.setAttribute("id", "animationColorInput");
+         animationColorInput.setAttribute("class", "text-input");
+         animationColorInput.style.width = "50px";
+         animationColorInput.setAttribute("data-huebee", "{ \"saturations\": 1, \"hues\":6}");
+
+         animation.appendChild(animationCaption);
+         animation.appendChild(animationInputGradient);
+         animation.appendChild(animationInputGradientLabel)
+         animation.appendChild(animationInputPulse);
+         animation.appendChild(animationInputPulseLabel);
+         animation.appendChild(animationInputStill);
+         animation.appendChild(animationInputStillLabel);
+         animation.appendChild(animationColorCaption);
+         animation.appendChild(animationColorInput);
+
+         binding = document.createElement("div");
+         binding.setAttribute("style", "font-size: 10pt; font-weight: bold; margin: 10px;");
+
+         bindingCaption = document.createElement("span");
+         bindingCaption.innerText = "Binding: ";
+
+         bindingSeq = document.createElement("span");
+
+         debug = document.createElement("div");
+         debug.setAttribute("id", "debug");
+
+         // Add a single input
+         addBindingSeq(bindingSeq);
+
+         binding.appendChild(bindingCaption);
+         binding.appendChild(bindingSeq);
+
+         buttons = document.createElement("div");
+         buttons.setAttribute("style", "font-size: 10pt; font-weight: bold; margin: 10px; text-align: center;");
+
+         btnSave = document.createElement("input");
+         btnSave.setAttribute("style", "margin: 20px; width: 150px;")
+         btnSave.setAttribute("type", "button");
+         btnSave.setAttribute("value", "Save");
+
+         btnSave.onclick = (event) => {
+            w.style.display = "none";
+         };
+
+         btnCancel = document.createElement("input");
+         btnCancel.setAttribute("style", "margin: 20px; width: 150px;")
+         btnCancel.setAttribute("type", "button");
+         btnCancel.setAttribute("value", "Cancel");
+
+         btnCancel.onclick = (event) => {
+            w.style.display = "none";
+         };
+
+         buttons.appendChild(btnSave);
+         buttons.appendChild(btnCancel);
+
+         content.appendChild(title);
+         content.appendChild(pressColor);
+         content.appendChild(animation);
+         content.appendChild(binding);
+         content.appendChild(debug);
+         content.appendChild(buttons);
+
+         w.appendChild(content);
+         w.style.display = "none";
+         document.body.appendChild(w);
+
+         animationInputGradient.click();
+
+      }
+
+      function showConfigWindow(btnIdx) {
+         $("#configWindow")[0].style.display = "block";
+         $("#titleCaptionBtnIdx")[0].innerText = btnIdx;
+      }
+
+      var currentFocus = undefined;
+
+      function focusNextField(next) {
+         next.focus();
+      }
+
+      function triggerPress(event) {
+         // Get the next input
+         var nextId = event.target.getAttribute("nextId")
+
+         // If there isn't one, create one.
+         if (nextId == undefined) {
+            nextId = parseInt(event.target.getAttribute("keyId")) + 1;
+
+            next = addBindingSeq(event.target.parentElement);
+            next.setAttribute("keyId", nextId);
+            next.setAttribute("id", "keyId" + nextId);
+
+            // Set the next Id
+            event.target.setAttribute("nextId", nextId);
+         }
+         else {
+            next = $("#keyId" + nextId)[0]
+         }
+
+         setTimeout(focusNextField, 100, next);
+      }
+
+      function addBindingSeq(parent) {
+         var input = document.createElement("input");
+         input.setAttribute("style", "width: 50px");
+         input.setAttribute("keyId", 0);
+
+
+         input.onfocus = (event) => {
+            $("#debug")[0].innerText = "Current Focus: " + input.getAttribute("keyId");
+            currentFocus = event.target;
+         }
+
+         input.onblur = (event) => {
+            currentFocus = undefined;
+         }
+
+         input.onkeypress = (event) => {
+            event.target.value = "";
+            triggerPress(event);
+         };
+
+         parent.appendChild(input);
+
+
+         return input;
+      }
+
+
+      document.onkeydown = (e) => {
+         if (currentFocus == undefined) {
+            return;
+         }
+
+         event.key = e.key;
+         event.target = currentFocus;
+
+         // Write to the right text box
+         currentFocus.value = e.key;
+
+         // Trigger the press
+         triggerPress(event);
+      }
+
+      createConfigWindow(500, 300);
+
       $(window).on('load', () => {
          // Get number of buttons
          jQuery.get(
@@ -76,8 +319,6 @@
                if (!data["success"]) {
                   alert("Internal Error Occurred...");
                }
-
-               var screenWidth = 600 - 30;
 
                // Supported layouts: 2x2 3x2 3x3
                var n = data["btnNum"];
@@ -99,8 +340,13 @@
                var startY = 10;
 
                // Resize canvas
-               c.style.height = startY * 2 + Math.floor(n / btnsInRow) * (padY * 2 + btnSize);
-               c.style.width = screenWidth;
+               var h = startY * 2 + Math.floor(n / btnsInRow) * (padY * 2 + btnSize);
+               var w = screenWidth;
+
+               c.style.height = w;
+               c.style.height = h;
+
+
 
                // Draw btnNum number of buttons
                for (var i = 0; i < n; ++i) {
@@ -123,6 +369,7 @@
             }
          );
       });
+
       $("#configureBtn").click((event) => {
          jQuery.get(
             "/api/toggleBtnPrompt",
@@ -133,11 +380,14 @@
                   return;
                }
 
+               showConfigWindow(data["pressedIdx"]);
+
                // Highlight key
-               $("#btnOuter" + data["pressedIdx"])[0].style.fill = "#000000";
+               // $("#btnOuter" + data["pressedIdx"])[0].style.fill = "#000000";
             }
          );
       })
+
    </script>
 </body>
 
