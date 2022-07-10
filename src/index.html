@@ -3,8 +3,6 @@
 <head lang="en">
    <meta charset="UTF-8">
    <script src="https://code.jquery.com/jquery-3.6.0.js"></script>
-   <link rel="stylesheet" href="https://unpkg.com/huebee@2/dist/huebee.min.css">
-   <script src="https://unpkg.com/huebee@2/dist/huebee.pkgd.min.js"></script>
 </head>
 
 <body>
@@ -18,7 +16,7 @@
       var screenWidth = 570;
       var defaultOuterColor = "#d0d0d0";
 
-      c = document.getElementById("canvas");
+      var c = document.getElementById("canvas");
 
       function drawButton(c, x, y, caption, idx, f) {
          r = document.createElementNS("http://www.w3.org/2000/svg", "rect");
@@ -57,11 +55,11 @@
          t = document.createElementNS("http://www.w3.org/2000/svg", "text");
          t.innerHTML = caption;
          c.appendChild(t);
-         t.setAttribute("x", x + btnSize / 2 - t.getBBox().width / 2);
-         t.setAttribute("y", y + btnSize / 2 - t.getBBox().height / 2);
          t.setAttribute("id", "caption" + idx);
          t.setAttribute("btnIdx", idx);
-         t.setAttribute("style", "font-family: Arial");
+         t.setAttribute("style", "font-family: Arial; font-size: 12px; font-weight: bold");
+         t.setAttribute("x", x + btnSize / 2 - t.getBBox().width / 2);
+         t.setAttribute("y", y + btnSize / 2 - t.getBBox().height / 2);
 
          t.onclick = (event) => {
             event.
@@ -69,10 +67,12 @@
          }
       }
 
-      function createConfigWindow(width, height) {
+      function createConfigWindow(width, height, btnIdx, config) {
          w = document.createElement("div");
-         w.setAttribute("style", "width: " + width + "px; height: " + height + "px; position: absolute; top: 0px; left: 0px; background-color: #ffffff");
+         w.setAttribute("style", "width: " + width + "px; height: " + height + "px; display: block; position: absolute; background-color: #ffffff");
          w.setAttribute("id", "configWindow");
+         w.style.top = "20px";
+         w.style.left = (screenWidth / 2 - width / 2) + "px";
 
          content = document.createElement("div");
          content.setAttribute("style", "display: block; margin: auto; padding: 10px; background-color: #d0d0d0; font-family: Arial");
@@ -85,7 +85,7 @@
 
          titleCaptionBtnIdx = document.createElement("span");
          titleCaptionBtnIdx.setAttribute("id", "titleCaptionBtnIdx");
-         titleCaptionBtnIdx.innerText = "###";
+         titleCaptionBtnIdx.innerText = btnIdx;
 
          title.appendChild(titleCaption);
          title.appendChild(titleCaptionBtnIdx);
@@ -97,10 +97,16 @@
          pressColorCaption.innerText = "Press Color: "
 
          pressColorInput = document.createElement("input");
-         pressColorInput.setAttribute("value", "#cc00ff");
+         pressColorInput.setAttribute("type", "color");
+
+         if (config["pressedColor"] == undefined) {
+            pressColorInput.setAttribute("value", "#cc00ff");
+         }
+         else {
+            pressColorInput.setAttribute("value", config["pressedColor"]);
+         }
          pressColorInput.setAttribute("id", "pressColorInput");
          pressColorInput.setAttribute("class", "text-input");
-         pressColorInput.setAttribute("data-huebee", "{ \"saturations\": 1, \"hues\":6}");
 
          pressColor.appendChild(pressColorCaption);
          pressColor.appendChild(pressColorInput);
@@ -162,11 +168,11 @@
          animationColorCaption.style.marginLeft = "10px";
 
          animationColorInput = document.createElement("input");
+         animationColorInput.setAttribute("type", "color");
          animationColorInput.setAttribute("value", "#0000ff");
          animationColorInput.setAttribute("id", "animationColorInput");
          animationColorInput.setAttribute("class", "text-input");
          animationColorInput.style.width = "50px";
-         animationColorInput.setAttribute("data-huebee", "{ \"saturations\": 1, \"hues\":6}");
 
          animation.appendChild(animationCaption);
          animation.appendChild(animationInputGradient);
@@ -189,8 +195,17 @@
          debug = document.createElement("div");
          debug.setAttribute("id", "debug");
 
-         // Add a single input
-         addBindingSeq(bindingSeq);
+         // Write all the bindings
+         if (config["bindings"] == undefined) {
+            addBindingSeq(bindingSeq);
+         }
+         else {
+            for (idx in config["bindings"]) {
+               var input = addBindingSeq(bindingSeq, config["bindings"][idx], idx);
+               input.setAttribute("id", "keyId" + idx);
+               input.setAttribute("nextId", 1 * idx + 1);
+            }
+         }
 
          binding.appendChild(bindingCaption);
          binding.appendChild(bindingSeq);
@@ -204,7 +219,41 @@
          btnSave.setAttribute("value", "Save");
 
          btnSave.onclick = (event) => {
-            w.style.display = "none";
+            var binding = []
+            var currBindId = 0;
+            var bindingInput = document.getElementById("keyId" + currBindId);
+
+            while (bindingInput != undefined) {
+               if (bindingInput.value != "") {
+                  binding.push(bindingInput.value);
+               }
+
+               bindingInput = document.getElementById("keyId" + ++currBindId);
+            }
+
+            // Send configuration data to server
+            $.ajax({
+               url: "/api/setConfig",
+               type: "post",
+               contentType: "application/json",
+               data: JSON.stringify({
+                  "btnIdx": btnIdx,
+                  "pressedColor": pressColorInput.getAttribute("value"),
+                  "animation": animationInputGradient.checked ? "gradient" : (animationInputPulse.checked ? "pulse" : "still"),
+                  "animationColor": animationColorInput.getAttribute("value"),
+                  "bindings": binding
+               }),
+               dataType: "json",
+               success: (result) => {
+                  if (result["success"]) {
+                     document.body.removeChild(w);
+                     redrawBtns();
+                  }
+                  else {
+                     alert("Error saving config for button #" + btnIdx);
+                  }
+               }
+            });
          };
 
          btnCancel = document.createElement("input");
@@ -213,7 +262,7 @@
          btnCancel.setAttribute("value", "Cancel");
 
          btnCancel.onclick = (event) => {
-            w.style.display = "none";
+            document.body.removeChild(w);
          };
 
          buttons.appendChild(btnSave);
@@ -227,10 +276,28 @@
          content.appendChild(buttons);
 
          w.appendChild(content);
-         w.style.display = "none";
          document.body.appendChild(w);
 
-         animationInputGradient.click();
+         if (config["animation"] == undefined) {
+            animationInputGradient.click();
+         }
+         else {
+            if (config["animation"] == "gradient") {
+               animationInputGradient.click();
+            }
+            else {
+               if (config["animation"] == "pulse") {
+                  animationInputPulse.click();
+               }
+               else {
+                  animationInputStill.click()
+               }
+
+               if (config["animationColor"] != undefined) {
+                  animationColorInput.setAttribute("value", config["animationColor"]);
+               }
+            }
+         }
 
       }
 
@@ -247,10 +314,33 @@
 
       function triggerPress(event) {
          // Get the next input
-         var nextId = event.target.getAttribute("nextId")
+         var nextId = event.target.getAttribute("nextId");
+
+         // Handle backspace
+         if (event.key == "Backspace") {
+            var keyId = event.target.getAttribute("keyId");
+
+            // Just erase the content
+            event.target.value = "";
+
+            if (keyId > 0) {
+               // Is it the last one?
+               if (document.getElementById("keyId" + (keyId * 1 + 1)) == undefined) {
+                  // Delete it
+                  event.target.parentElement.removeChild(event.target);
+
+                  // Focus on previous
+                  var previous = document.getElementById("keyId" + (keyId * 1 - 1));
+                  setTimeout(focusNextField, 100, previous);
+               }
+            }
+
+            // Don't continue execution
+            return;
+         }
 
          // If there isn't one, create one.
-         if (nextId == undefined) {
+         if ((nextId == undefined) || (document.getElementById("keyId" + nextId) == undefined)) {
             nextId = parseInt(event.target.getAttribute("keyId")) + 1;
 
             next = addBindingSeq(event.target.parentElement);
@@ -267,11 +357,20 @@
          setTimeout(focusNextField, 100, next);
       }
 
-      function addBindingSeq(parent) {
+      function addBindingSeq(parent, value, idx) {
          var input = document.createElement("input");
          input.setAttribute("style", "width: 50px");
          input.setAttribute("keyId", 0);
 
+         if (value != undefined) {
+            input.setAttribute("value", value);
+         }
+
+         if (idx != undefined) {
+            input.setAttribute("keyId", idx);
+         }
+
+         input.setAttribute("id", "keyBinding" + input.getAttribute("keyId"));
 
          input.onfocus = (event) => {
             $("#debug")[0].innerText = "Current Focus: " + input.getAttribute("keyId");
@@ -309,9 +408,7 @@
          triggerPress(event);
       }
 
-      createConfigWindow(500, 300);
-
-      $(window).on('load', () => {
+      function redrawBtns() {
          // Get number of buttons
          jQuery.get(
             "/api/btnNum",
@@ -320,54 +417,90 @@
                   alert("Internal Error Occurred...");
                }
 
-               // Supported layouts: 2x2 3x2 3x3
-               var n = data["btnNum"];
+               // Get all the config
+               jQuery.get(
+                  "/api/getConfig",
+                  (config) => {
 
-               if (n <= 4) {
-                  btnsInRow = 2;
-               }
-               else if (n < 12) {
-                  btnsInRow = 3;
-               }
-               else {
-                  btnsInRow = 4;
-               }
+                     // Supported layouts: 2x2 3x2 3x3
+                     var n = data["btnNum"];
 
-               var padX = 10;
-               var padY = 10;
+                     if (n <= 4) {
+                        btnsInRow = 2;
+                     }
+                     else if (n < 12) {
+                        btnsInRow = 3;
+                     }
+                     else {
+                        btnsInRow = 4;
+                     }
 
-               var startX = screenWidth / 2 - (btnsInRow * (padX * 2 + btnSize)) / 2;
-               var startY = 10;
+                     var padX = 10;
+                     var padY = 10;
 
-               // Resize canvas
-               var h = startY * 2 + Math.floor(n / btnsInRow) * (padY * 2 + btnSize);
-               var w = screenWidth;
+                     var startX = screenWidth / 2 - (btnsInRow * (padX * 2 + btnSize)) / 2;
+                     var startY = 10;
 
-               c.style.height = w;
-               c.style.height = h;
+                     // Resize canvas
+                     var h = startY * 2 + Math.floor(n / btnsInRow) * (padY * 2 + btnSize);
+                     var w = screenWidth;
 
+                     c.style.width = w;
+                     c.style.height = h;
 
+                     // Draw btnNum number of buttons
+                     for (var i = 0; i < n; ++i) {
+                        // Try to match pysical layout
+                        if (Math.floor(i / btnsInRow) % 2 == 0) {
+                           xPos = startX + (i % btnsInRow) * (padX * 2 + btnSize);
+                        }
+                        else {
+                           xPos = startX + (btnsInRow - i % btnsInRow - 1) * (padX * 2 + btnSize);
+                        }
 
-               // Draw btnNum number of buttons
-               for (var i = 0; i < n; ++i) {
-                  // Try to match pysical layout
-                  if (Math.floor(i / btnsInRow) % 2 == 0) {
-                     xPos = startX + (i % btnsInRow) * (padX * 2 + btnSize);
+                        yPos = startY + Math.floor(i / btnsInRow) * (padY * 2 + btnSize);
+
+                        var bindingStr = ""
+
+                        // Build binding string
+                        for (var j = 0; j < config["config"][i]["bindings"].length; ++j) {
+                           var keyName = config["config"][i]["bindings"][j];
+
+                           // Shorten the longer words
+                           if (keyName == "Control") {
+                              keyName = "Ctrl";
+                           }
+                           else if (keyName == "ArrowUp") {
+                              keyName = "Up";
+                           }
+                           else if (keyName == "ArrowDown") {
+                              keyName = "Down";
+                           }
+                           else if (keyName == "ArrowLeft") {
+                              keyName = "Left";
+                           }
+                           else if (keyName == "ArrowRight") {
+                              keyName = "Right";
+                           }
+
+                           bindingStr += " " + keyName;
+                        }
+
+                        drawButton(c,
+                           xPos,
+                           yPos
+                           , bindingStr /* "Hello " + i*/, i, (event) => {
+                              alert("Pressed idx " + event.target.getAttribute("btnIdx"));
+                           });
+                     }
                   }
-                  else {
-                     xPos = startX + (btnsInRow - i % btnsInRow - 1) * (padX * 2 + btnSize);
-                  }
-
-                  yPos = startY + Math.floor(i / btnsInRow) * (padY * 2 + btnSize);
-                  drawButton(c,
-                     xPos,
-                     yPos
-                     , "Hello " + i, i, (event) => {
-                        alert("Pressed idx " + event.target.getAttribute("btnIdx"));
-                     });
-               }
+               )
             }
          );
+      }
+
+      $(window).on('load', () => {
+         redrawBtns();
       });
 
       $("#configureBtn").click((event) => {
@@ -380,7 +513,23 @@
                   return;
                }
 
-               showConfigWindow(data["pressedIdx"]);
+               // Get the config so it can be displayed 
+               jQuery.get(
+                  "/api/getConfig?btnIdx=" + data["pressedIdx"],
+                  (result) => {
+                     if (!result["success"]) {
+                        alert("Error getting configuration for button #" + data["pressedIdx"]);
+
+                        return;
+                     }
+
+                     createConfigWindow(c.style.width, c.style.height, data["pressedIdx"], result["config"]);
+                  }
+               )
+
+
+
+               // showConfigWindow(data["pressedIdx"]);
 
                // Highlight key
                // $("#btnOuter" + data["pressedIdx"])[0].style.fill = "#000000";

@@ -1,5 +1,6 @@
 import os
 from tracemalloc import start
+from json import load, dump, dumps
 import webview
 import paws
 from time import time
@@ -27,6 +28,64 @@ def setWinObj(obj):
 @server.route("/")
 def landing():
     return render_template("index.html", token=webview.token)
+
+
+CONFIG_FILE = os.path.expanduser("~/.paws-config")
+
+
+@server.route("/api/getConfig")
+def getConfig():
+    try:
+        # Create config file if not exist
+        if not os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, "w") as f:
+                dump([], f)
+
+        # Get requested button id
+        btnIdx = request.args.get("btnIdx")
+
+        if btnIdx is not None:
+            btnIdx = int(btnIdx)
+
+        with open(CONFIG_FILE, "r") as f:
+            config = load(f)
+
+            if btnIdx is None:
+                return {"success": True, "config": config}
+            elif btnIdx >= len(config):
+                return {"success": True, "config": {}}
+            else:
+                return {"success": True, "config": config[btnIdx]}
+    except Exception as e:
+        print("Error", str(e))
+        return {"success": False, "Error": str(e)}
+
+
+@server.route("/api/setConfig", methods=["POST"])
+def setConfig():
+    currConfig = request.get_json()
+
+    # Read the config
+    with open(CONFIG_FILE, "r") as f:
+        config = load(f)
+
+    btnIdx = currConfig["btnIdx"]
+
+    # Modify the config
+    config[btnIdx]["pressedColor"] = currConfig["pressedColor"]
+    config[btnIdx]["animation"] = currConfig["animation"]
+    config[btnIdx]["animationColor"] = currConfig["animationColor"]
+    config[btnIdx]["bindings"] = currConfig["bindings"]
+
+    with open(CONFIG_FILE, "w") as f:
+        dump(config, f)
+
+    # Serialize the config and dump to device
+    c = paws.json2conf(config)
+
+    print(c.encode())
+
+    return {"success": True}
 
 
 @server.route("/api/btnNum")

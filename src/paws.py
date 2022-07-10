@@ -105,6 +105,61 @@ class ConfigAnimation:
         )
 
 
+def hex2color(h):
+    if h is None:
+        return None
+    return ConfigColor(int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16))
+
+
+def animation2enum(animation):
+    if animation.lower() == "gradient":
+        return ConfigAnimation.GRADIENT
+    elif animation.lower() == "pulse":
+        return ConfigAnimation.PULSE
+    else:
+        return ConfigAnimation.STILL
+
+
+def key2code(k):
+    if "Shift" in k:
+        return KEY_CODE_LSHIFT
+    elif "Ctrl" in k or "Control" in k:
+        return KEY_CODE_LCTRL
+    elif "ArrowUp" in k:
+        return KEY_CODE_UP_ARROW
+    elif "ArrowDown" in k:
+        return KEY_CODE_DOWN_ARROW
+    elif "ArrowLeft" in k:
+        return KEY_CODE_LEFT_ARROW
+    elif "ArrowRight" in k:
+        return KEY_CODE_RIGHT_ARROW
+    else:
+        return ord(k)
+
+
+def json2conf(config):
+    configList = []
+
+    for c, idx in zip(config, range(len(config))):
+        # Add press color
+        configList.append(ConfigLED(idx, hex2color(c["pressedColor"])))
+
+        # Append animation
+        configList.append(
+            ConfigAnimation(
+                idx,
+                animation2enum(c["animation"]),
+                hex2color(c.get("animationColor", None)),
+            )
+        )
+
+        # Append bindings
+        for b in c["bindings"]:
+            configList.append(ConfigKey(idx, key2code(b)))
+
+    return Config(configList)
+
+
 def portName(port):
     if sys.platform.startswith("win"):
         return port
