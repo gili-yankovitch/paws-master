@@ -69,7 +69,9 @@ def setConfig():
     with open(CONFIG_FILE, "r") as f:
         config = load(f)
 
-    btnIdx = currConfig["btnIdx"]
+    btnIdx = int(currConfig["btnIdx"])
+
+    print("pressedColor:", currConfig["pressedColor"])
 
     # Modify the config
     config[btnIdx]["pressedColor"] = currConfig["pressedColor"]
@@ -83,7 +85,11 @@ def setConfig():
     # Serialize the config and dump to device
     c = paws.json2conf(config)
 
-    print(c.encode())
+    s = paws.probePort()
+
+    paws.writeConfig(s, c)
+
+    s.close()
 
     return {"success": True}
 

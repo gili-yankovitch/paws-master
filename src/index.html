@@ -8,7 +8,7 @@
 <body>
    <svg id="canvas" style="width: 100%; height: 1000px; padding: 0px; margin: 0px;">
    </svg>
-   <input type="button" id="configureBtn" value="Configure Key..."
+   <input type="button" id="configureBtn" value="Configure Keys..."
       style="display: block; margin: auto; padding: 10px 50px 10px 50px; border-radius: 5px; border-color:darkgray" />
    <script>
       var btnSize = 100;
@@ -26,7 +26,7 @@
          r.setAttribute("height", btnSize);
          r.setAttribute("rx", 20);
          r.setAttribute("ry", 20);
-         r.setAttribute("style", "fill: #d0d0d0;");
+         r.setAttribute("style", "fill: #d0d0d0; cursor: hand");
          r.setAttribute("id", "btnOuter" + idx);
          r.setAttribute("btnIdx", idx);
          c.appendChild(r);
@@ -42,7 +42,7 @@
          r.setAttribute("height", btnInnerSize);
          r.setAttribute("rx", 20);
          r.setAttribute("ry", 20);
-         r.setAttribute("style", "fill: #ffffff;");
+         r.setAttribute("style", "fill: #ffffff; cursor: hand");
          r.setAttribute("id", "btnInner" + idx);
          r.setAttribute("btnIdx", idx);
 
@@ -57,13 +57,12 @@
          c.appendChild(t);
          t.setAttribute("id", "caption" + idx);
          t.setAttribute("btnIdx", idx);
-         t.setAttribute("style", "font-family: Arial; font-size: 12px; font-weight: bold");
+         t.setAttribute("style", "font-family: Arial; font-size: 12px; font-weight: bold; cursor: hand");
          t.setAttribute("x", x + btnSize / 2 - t.getBBox().width / 2);
          t.setAttribute("y", y + btnSize / 2 - t.getBBox().height / 2);
 
          t.onclick = (event) => {
-            event.
-               f(event);
+            event.f(event);
          }
       }
 
@@ -71,11 +70,9 @@
          w = document.createElement("div");
          w.setAttribute("style", "width: " + width + "px; height: " + height + "px; display: block; position: absolute; background-color: #ffffff");
          w.setAttribute("id", "configWindow");
-         w.style.top = "20px";
-         w.style.left = (screenWidth / 2 - width / 2) + "px";
 
          content = document.createElement("div");
-         content.setAttribute("style", "display: block; margin: auto; padding: 10px; background-color: #d0d0d0; font-family: Arial");
+         content.setAttribute("style", "display: block; margin: auto; padding: 10px; background-color: #ffffff; border: 5px solid #5d5d5d; border-radius: 5px; font-family: Arial");
 
          title = document.createElement("div");
          title.setAttribute("style", "font-size: 14pt; font-weight: bold; margin: 10px;");
@@ -238,9 +235,9 @@
                contentType: "application/json",
                data: JSON.stringify({
                   "btnIdx": btnIdx,
-                  "pressedColor": pressColorInput.getAttribute("value"),
+                  "pressedColor": pressColorInput.value,
                   "animation": animationInputGradient.checked ? "gradient" : (animationInputPulse.checked ? "pulse" : "still"),
-                  "animationColor": animationColorInput.getAttribute("value"),
+                  "animationColor": animationColorInput.value,
                   "bindings": binding
                }),
                dataType: "json",
@@ -277,6 +274,9 @@
 
          w.appendChild(content);
          document.body.appendChild(w);
+
+         w.style.top = "30px";
+         w.style.left = (screenWidth / 2 - (screenWidth * 80 / 100) / 2) + "px";
 
          if (config["animation"] == undefined) {
             animationInputGradient.click();
@@ -482,6 +482,9 @@
                            else if (keyName == "ArrowRight") {
                               keyName = "Right";
                            }
+                           else if (keyName == " ") {
+                              keyName = "Space";
+                           }
 
                            bindingStr += " " + keyName;
                         }
@@ -490,7 +493,19 @@
                            xPos,
                            yPos
                            , bindingStr /* "Hello " + i*/, i, (event) => {
-                              alert("Pressed idx " + event.target.getAttribute("btnIdx"));
+                              // Get the config so it can be displayed 
+                              jQuery.get(
+                                 "/api/getConfig?btnIdx=" + event.target.getAttribute("btnIdx"),
+                                 (result) => {
+                                    if (!result["success"]) {
+                                       alert("Error getting configuration for button #" + event.target.getAttribute("btnIdx"));
+
+                                       return;
+                                    }
+
+                                    createConfigWindow(c.style.width, c.style.height, event.target.getAttribute("btnIdx"), result["config"]);
+                                 }
+                              )
                            });
                      }
                   }

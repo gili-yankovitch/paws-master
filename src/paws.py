@@ -100,8 +100,12 @@ class ConfigAnimation:
     def encode(self):
         return (
             ConfigObj.encode(self)
+            + (
+                bytes([0, 0, 0])
+                if self.color == None or self.animation_type == ConfigAnimation.GRADIENT
+                else self.color.encode()
+            )
             + pack("<B", self.animation_type)
-            + (bytes() if self.color == None else self.color.encode())
         )
 
 
@@ -141,6 +145,18 @@ def json2conf(config):
     configList = []
 
     for c, idx in zip(config, range(len(config))):
+        # Append bindings
+        for b in c["bindings"]:
+            configList.append(
+                ConfigKey(
+                    idx,
+                    key2code(b),
+                    press_type=ConfigKey.PRESS_TYPE_CONT
+                    if len(c["bindings"]) == 1
+                    else ConfigKey.PRESS_TYPE_ONCE,
+                )
+            )
+
         # Add press color
         configList.append(ConfigLED(idx, hex2color(c["pressedColor"])))
 
@@ -152,10 +168,6 @@ def json2conf(config):
                 hex2color(c.get("animationColor", None)),
             )
         )
-
-        # Append bindings
-        for b in c["bindings"]:
-            configList.append(ConfigKey(idx, key2code(b)))
 
     return Config(configList)
 

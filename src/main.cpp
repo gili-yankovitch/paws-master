@@ -834,6 +834,12 @@ static RgbColor Pulse(uint8_t btnIdx)
 		cycle = 255 - (animationCycleLocal & 0xff);
 	}
 
+	// Never go 0. This flickers...
+	if (cycle < 20)
+	{
+		cycle = 20;
+	}
+
 	uint32_t r = animationMap[btnIdx]->color.ledR;
 	uint32_t g = animationMap[btnIdx]->color.ledG;
 	uint32_t b = animationMap[btnIdx]->color.ledB;
@@ -843,15 +849,15 @@ static RgbColor Pulse(uint8_t btnIdx)
 	b *= cycle;
 
 	r /= 255;
+	g /= 255;
 	b /= 255;
-	r /= 255;
 
 	return RgbColor(r, g, b);
 }
 
 static RgbColor Still(uint8_t btnIdx)
 {
-	return RgbColor(ledsMap[btnIdx]->ledR, ledsMap[btnIdx]->ledG, ledsMap[btnIdx]->ledB);
+	return RgbColor(animationMap[btnIdx]->color.ledR, animationMap[btnIdx]->color.ledG, animationMap[btnIdx]->color.ledB);
 }
 
 void loop()
